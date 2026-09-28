@@ -23,14 +23,14 @@ export default function HomePage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4">
           <Link
-            href="/card/demo"
-            className="group flex flex-col items-center justify-center p-5 rounded-2xl bg-stone-900/80 border border-stone-800/80 hover:border-amber-500/50 hover:bg-stone-900 transition-all duration-300 shadow-lg hover:shadow-amber-500/10"
+            href="/guest"
+            className="group flex flex-col items-center justify-center p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 hover:border-amber-500 hover:bg-stone-900 transition-all duration-300 shadow-lg hover:shadow-amber-500/10"
           >
-            <div className="w-12 h-12 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center group-hover:scale-110 transition-transform">
-              <Coffee className="w-6 h-6" />
+            <div className="w-12 h-12 rounded-xl bg-amber-500 text-stone-950 flex items-center justify-center group-hover:scale-110 transition-transform font-bold">
+              <QrCode className="w-6 h-6 stroke-[2.5]" />
             </div>
-            <span className="mt-3 text-sm font-semibold text-white">Карточка гостя</span>
-            <span className="text-xs text-stone-400 mt-1 text-center">Виджет 6 штампов и QR</span>
+            <span className="mt-3 text-sm font-semibold text-white">Мой QR (Гость)</span>
+            <span className="text-xs text-stone-400 mt-1 text-center">Все кофейни и штампы</span>
           </Link>
 
           <Link

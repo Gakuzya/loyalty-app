@@ -31,21 +31,21 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // Важно использовать getUser(), а не getSession() для безопасной серверной проверки
+  // Проверка активной сессии
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
 
-  // Защищенные маршруты для персонала
-  const isProtectedPath =
+  // Закрытые маршруты для персонала
+  const isStaffProtectedPath =
     path.startsWith('/dashboard') ||
     path.startsWith('/scan') ||
     path.startsWith('/action');
 
-  // Если неавторизованный пользователь пытается зайти в закрытый раздел
-  if (isProtectedPath && !user) {
+  // Если неавторизованный пользователь пытается зайти в закрытый персонал-раздел
+  if (isStaffProtectedPath && !user) {
     const redirectUrl = new URL('/login', request.url);
     return NextResponse.redirect(redirectUrl);
   }
@@ -64,8 +64,8 @@ export const config = {
     /*
      * Применяем middleware ко всем маршрутам, кроме:
      * - _next/static (статические файлы)
-     * - _next/image (оптимизация изображений)
-     * - favicon.ico и файлы ассетов (.svg, .png, .jpg)
+     * - _next/image (оптимизация картинок)
+     * - favicon.ico и файлы ассетов
      */
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],

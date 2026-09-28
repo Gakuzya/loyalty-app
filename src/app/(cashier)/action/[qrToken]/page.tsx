@@ -3,7 +3,7 @@ import prisma from '@/lib/prisma';
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { Coffee, ChevronLeft, QrCode, User, Gift, AlertTriangle, ArrowLeft } from 'lucide-react';
+import { Coffee, ChevronLeft, QrCode, User, Gift, AlertTriangle, ArrowLeft, Sparkles } from 'lucide-react';
 import { revalidatePath } from 'next/cache';
 
 interface ActionPageProps {
@@ -13,7 +13,8 @@ interface ActionPageProps {
 }
 
 export default async function ActionPage({ params }: ActionPageProps) {
-  const { qrToken } = await params;
+  const { qrToken: rawQrToken } = await params;
+  const qrToken = decodeURIComponent(rawQrToken);
 
   // 1. Проверяем авторизацию сотрудника
   const supabase = await createClient();
@@ -25,24 +26,79 @@ export default async function ActionPage({ params }: ActionPageProps) {
     redirect('/login');
   }
 
-  // 2. Поиск карты лояльности по уникальному токену
-  const card = await prisma.loyaltyCard.findUnique({
-    where: { qrToken },
-    include: {
-      customer: true,
-      shop: true,
+  // 2. Определяем заведение бариста (где он владелец или сотрудник)
+  let baristaShop = await prisma.shop.findFirst({
+    where: {
+      OR: [
+        { ownerId: authUser.id },
+        { staff: { some: { userId: authUser.id } } },
+      ],
     },
   });
 
+  if (!baristaShop) {
+    // Резерв: первое заведение в базе
+    baristaShop = await prisma.shop.findFirst();
+  }
+
+  // 3. Поиск карты лояльности (по прямому qrToken или по универсальному guest:userId)
+  let card = null;
+
+  if (qrToken.startsWith('guest:')) {
+    const customerId = qrToken.replace('guest:', '');
+    if (baristaShop) {
+      card = await prisma.loyaltyCard.findUnique({
+        where: {
+          customerId_shopId: {
+            customerId,
+            shopId: baristaShop.id,
+          },
+        },
+        include: {
+          customer: true,
+          shop: true,
+        },
+      });
+
+      // Если гость пришел в эту кофейню впервые — автоматически создаем карту
+      if (!card) {
+        const customer = await prisma.user.findUnique({ where: { id: customerId } });
+        if (customer) {
+          card = await prisma.loyaltyCard.create({
+            data: {
+              customerId,
+              shopId: baristaShop.id,
+              currentStamps: 0,
+              rewardsAvailable: 0,
+            },
+            include: {
+              customer: true,
+              shop: true,
+            },
+          });
+        }
+      }
+    }
+  } else {
+    // Поиск по стандартному уникальному токену карты
+    card = await prisma.loyaltyCard.findUnique({
+      where: { qrToken },
+      include: {
+        customer: true,
+        shop: true,
+      },
+    });
+  }
+
   if (!card) {
     return (
-      <div className="min-h-screen bg-[#0f0d0c] text-stone-100 flex flex-col items-center justify-center p-6 text-center">
+      <div className="min-h-screen bg-[#0f0d0c] text-stone-100 flex flex-col items-center justify-center p-6 text-center select-none">
         <div className="w-16 h-16 rounded-3xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center mb-4 shadow-xl">
           <AlertTriangle className="w-8 h-8" />
         </div>
         <h1 className="text-xl font-bold text-white mb-2">Карта не найдена</h1>
         <p className="text-xs text-stone-400 max-w-xs mb-6">
-          QR-код <span className="font-mono text-amber-400">{qrToken}</span> не существует или устарел.
+          QR-код <span className="font-mono text-amber-400">{qrToken}</span> не зарегистрирован в системе лояльности.
         </p>
         <Link
           href="/scan"
@@ -55,7 +111,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
     );
   }
 
-  // Server Action: Начислить 1 штамп от имени текущего бариста
+  // Server Action: Начислить 1 штамп
   async function awardStamp() {
     'use server';
 
@@ -80,14 +136,12 @@ export default async function ActionPage({ params }: ActionPageProps) {
     let updatedStamps = newStamps;
     let rewardsDelta = 0;
 
-    // Достигли целевого количества штампов
     if (newStamps >= current.shop.targetStamps) {
       earnedReward = true;
       updatedStamps = 0;
       rewardsDelta = 1;
     }
 
-    // Обновляем баланс карты
     await prisma.loyaltyCard.update({
       where: { id: current.id },
       data: {
@@ -98,7 +152,6 @@ export default async function ActionPage({ params }: ActionPageProps) {
       },
     });
 
-    // Убеждаемся, что бариста есть в таблице User Prisma
     await prisma.user.upsert({
       where: { id: currentUser.id },
       update: {},
@@ -113,7 +166,6 @@ export default async function ActionPage({ params }: ActionPageProps) {
       },
     });
 
-    // Фиксируем транзакцию с РЕАЛЬНЫМ ID бариста
     await prisma.transaction.create({
       data: {
         cardId: current.id,
@@ -125,12 +177,13 @@ export default async function ActionPage({ params }: ActionPageProps) {
       },
     });
 
-    revalidatePath(`/action/${qrToken}`);
+    revalidatePath(`/action/${encodeURIComponent(qrToken)}`);
     revalidatePath(`/card/${current.shop.slug}`);
     revalidatePath('/dashboard');
+    revalidatePath('/guest');
   }
 
-  // Server Action: Списать бесплатный кофе от имени текущего бариста
+  // Server Action: Списать бесплатный кофе
   async function redeemReward() {
     'use server';
 
@@ -168,9 +221,10 @@ export default async function ActionPage({ params }: ActionPageProps) {
       },
     });
 
-    revalidatePath(`/action/${qrToken}`);
+    revalidatePath(`/action/${encodeURIComponent(qrToken)}`);
     revalidatePath(`/card/${card!.shop.slug}`);
     revalidatePath('/dashboard');
+    revalidatePath('/guest');
   }
 
   const isRewardReady = card.rewardsAvailable > 0;
