@@ -2,8 +2,18 @@
 
 import React, { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { login, signUp } from '@/app/login/actions';
 import { useRouter } from 'next/navigation';
-import { Coffee, Mail, Lock, ArrowRight, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
+import {
+  Coffee,
+  Mail,
+  Lock,
+  ArrowRight,
+  Sparkles,
+  AlertCircle,
+  CheckCircle2,
+  User,
+} from 'lucide-react';
 
 export const GuestPortalAuth: React.FC = () => {
   const router = useRouter();
@@ -24,37 +34,31 @@ export const GuestPortalAuth: React.FC = () => {
     setLoading(true);
 
     try {
+      const formData = new FormData();
+      formData.append('email', email);
+      formData.append('password', password);
+      formData.append('name', fullName);
+      formData.append('role', 'CUSTOMER');
+
       if (isSignUp) {
-        // Регистрация нового гостя
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              full_name: fullName,
-              role: 'CUSTOMER',
-            },
-          },
-        });
-
-        if (signUpError) throw signUpError;
-
-        if (data.session) {
-          router.refresh();
-        } else {
-          setSuccessMessage('Аккаунт создан! Проверьте почту или выполните вход.');
+        // Регистрация с автоматическим подтверждением email
+        const res = await signUp(formData);
+        if (res && 'error' in res && res.error) {
+          setError(res.error);
+        } else if (res && 'success' in res && res.success) {
+          setSuccessMessage(res.success);
           setIsSignUp(false);
+        } else {
+          router.refresh();
         }
       } else {
-        // Вход существующего гостя
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-        if (signInError) throw signInError;
-
-        router.refresh();
+        // Вход с автоматическим решением проблемы неподтвержденного email
+        const res = await login(formData);
+        if (res?.error) {
+          setError(res.error);
+        } else {
+          router.refresh();
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -65,17 +69,33 @@ export const GuestPortalAuth: React.FC = () => {
   };
 
   const handleGoogleLogin = async () => {
+    setError(null);
+    setLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/guest`,
+          redirectTo: `${window.location.origin}/auth/callback?next=/guest`,
         },
       });
-      if (error) throw error;
+
+      if (oauthError) {
+        if (
+          oauthError.message.toLowerCase().includes('not enabled') ||
+          oauthError.message.toLowerCase().includes('unsupported')
+        ) {
+          setError(
+            'Вход через Google временно не настроен в вашей панели Supabase (Auth -> Providers -> Google). Пожалуйста, включите его или войдите по Email и паролю.'
+          );
+        } else {
+          setError(`Ошибка Google: ${oauthError.message}`);
+        }
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
+      setError(`Ошибка Google: ${msg}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -105,8 +125,9 @@ export const GuestPortalAuth: React.FC = () => {
           onClick={() => {
             setIsSignUp(false);
             setError(null);
+            setSuccessMessage(null);
           }}
-          className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all ${
+          className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
             !isSignUp
               ? 'bg-amber-500 text-stone-950 shadow-md'
               : 'text-stone-400 hover:text-white'
@@ -119,8 +140,9 @@ export const GuestPortalAuth: React.FC = () => {
           onClick={() => {
             setIsSignUp(true);
             setError(null);
+            setSuccessMessage(null);
           }}
-          className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all ${
+          className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
             isSignUp
               ? 'bg-amber-500 text-stone-950 shadow-md'
               : 'text-stone-400 hover:text-white'
@@ -132,14 +154,14 @@ export const GuestPortalAuth: React.FC = () => {
 
       {/* Оповещения об ошибке / успехе */}
       {error && (
-        <div className="mb-4 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-start gap-2.5 text-rose-400 text-xs">
+        <div className="mb-4 p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-start gap-2.5 text-rose-400 text-xs">
           <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
       )}
 
       {successMessage && (
-        <div className="mb-4 p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-start gap-2.5 text-emerald-400 text-xs">
+        <div className="mb-4 p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-start gap-2.5 text-emerald-400 text-xs">
           <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
           <span>{successMessage}</span>
         </div>
@@ -152,14 +174,17 @@ export const GuestPortalAuth: React.FC = () => {
             <label className="text-[11px] font-semibold text-stone-300 block">
               Ваше имя
             </label>
-            <input
-              type="text"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="Константин"
-              required
-              className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950/80 border border-stone-800 focus:border-amber-500 text-xs text-white placeholder-stone-500 outline-none transition-all"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Константин"
+                required
+                className="w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-stone-950/80 border border-stone-800 focus:border-amber-500 text-xs text-white placeholder-stone-500 outline-none transition-all"
+              />
+              <User className="w-4 h-4 text-stone-500 absolute left-3 top-3 pointer-events-none" />
+            </div>
           </div>
         )}
 
@@ -203,7 +228,9 @@ export const GuestPortalAuth: React.FC = () => {
           disabled={loading}
           className="w-full mt-2 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-stone-950 font-bold text-xs transition-all shadow-lg shadow-amber-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
         >
-          <span>{loading ? 'Секунду...' : isSignUp ? 'Зарегистрироваться' : 'Войти'}</span>
+          <span>
+            {loading ? 'Секунду...' : isSignUp ? 'Зарегистрироваться' : 'Войти'}
+          </span>
           {!loading && <ArrowRight className="w-3.5 h-3.5" />}
         </button>
       </form>
@@ -213,7 +240,8 @@ export const GuestPortalAuth: React.FC = () => {
         <button
           type="button"
           onClick={handleGoogleLogin}
-          className="w-full py-2.5 px-3.5 rounded-xl bg-stone-950/80 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-white text-xs font-semibold transition-all flex items-center justify-center gap-2.5 cursor-pointer"
+          disabled={loading}
+          className="w-full py-2.5 px-3.5 rounded-xl bg-stone-950/80 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-white text-xs font-semibold transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-50"
         >
           <svg className="w-4 h-4" viewBox="0 0 24 24">
             <path
