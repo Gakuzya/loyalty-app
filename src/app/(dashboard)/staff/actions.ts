@@ -2,7 +2,7 @@
 
 import prisma from '@/lib/prisma';
 import { createClient } from '@/lib/supabase/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { revalidatePath } from 'next/cache';
 
 export async function addStaffMember(prevState: any, formData: FormData) {
@@ -18,9 +18,14 @@ export async function addStaffMember(prevState: any, formData: FormData) {
   const email = (formData.get('email') as string)?.trim().toLowerCase();
   const name = (formData.get('name') as string)?.trim();
   const branchId = formData.get('branchId') as string;
+  const password = (formData.get('password') as string)?.trim() || 'coffee2026';
 
   if (!email || !email.includes('@')) {
     return { error: 'Укажите корректный email адрес сотрудника' };
+  }
+
+  if (password.length < 6) {
+    return { error: 'Пароль бариста должен содержать не менее 6 символов' };
   }
 
   if (!branchId) {
@@ -41,32 +46,45 @@ export async function addStaffMember(prevState: any, formData: FormData) {
     return { error: 'Выбранный филиал не найден или не принадлежит вашей сети' };
   }
 
-  // 1. Создаем или приглашаем пользователя в Supabase Auth через Service Role
+  // 1. Создаем или обновляем пользователя в Supabase Auth через Admin API
   let authUserId: string | null = null;
-  const adminSupabase = getServiceSupabase();
+  const admin = createAdminClient();
 
   try {
-    // Пробуем пригласить пользователя по email
-    const { data: inviteData, error: inviteError } =
-      await adminSupabase.auth.admin.inviteUserByEmail(email, {
-        data: {
-          full_name: name || 'Бариста',
+    const { data: createData, error: createError } =
+      await admin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: {
+          name: name || 'Бариста',
           role: 'BARISTA',
         },
       });
 
-    if (inviteData?.user) {
-      authUserId = inviteData.user.id;
-    } else if (inviteError) {
-      // Если пользователь уже зарегистрирован в Auth, получаем его ID
-      const { data: listData } = await adminSupabase.auth.admin.listUsers();
+    if (createData?.user) {
+      authUserId = createData.user.id;
+    } else if (createError) {
+      // Если пользователь уже зарегистрирован в Auth, обновляем его пароль и подтверждаем email
+      const { data: listData } = await admin.auth.admin.listUsers();
       const existing = listData?.users.find((u) => u.email?.toLowerCase() === email);
       if (existing) {
         authUserId = existing.id;
+        await admin.auth.admin.updateUserById(existing.id, {
+          password,
+          email_confirm: true,
+          user_metadata: {
+            name: name || existing.user_metadata?.name || 'Бариста',
+            role: 'BARISTA',
+          },
+        });
+      } else {
+        return { error: `Ошибка создания аккаунта бариста: ${createError.message}` };
       }
     }
-  } catch (err) {
-    console.warn('Supabase Auth invite fallback:', err);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('Supabase Auth staff creation error:', msg);
   }
 
   // 2. Создаем или обновляем пользователя в Prisma
@@ -93,5 +111,10 @@ export async function addStaffMember(prevState: any, formData: FormData) {
 
   return {
     success: `Сотрудник ${email} успешно добавлен в филиал «${branch.name}»!`,
+    credentials: {
+      email,
+      password,
+      branchName: branch.name,
+    },
   };
 }
