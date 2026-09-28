@@ -1,0 +1,118 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  CUSTOMER
+  BARISTA
+  OWNER
+  ADMIN
+}
+
+enum TransactionType {
+  STAMP_ADDED      // Начислен штамп
+  REWARD_EARNED    // Заполнена карточка (получен подарок)
+  REWARD_REDEEMED  // Списан бесплатный кофе
+  MANUAL_ADJUST    // Ручная корректировка владельцем
+}
+
+model User {
+  id            String    @id @default(uuid())
+  phone         String?   @unique
+  email         String?   @unique
+  fullName      String?
+  role          Role      @default(CUSTOMER)
+  telegramId    String?   @unique
+  avatarUrl     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Связи
+  ownedShops    Shop[]         @relation("ShopOwner")
+  staffAtShops  ShopStaff[]
+  loyaltyCards  LoyaltyCard[]
+  servedTransactions Transaction[] @relation("BaristaTransactions")
+
+  @@index([phone])
+  @@index([telegramId])
+}
+
+model Shop {
+  id              String   @id @default(uuid())
+  ownerId         String
+  name            String
+  slug            String   @unique // Для прямых ссылок: /card/[slug]
+  address         String?
+  logoUrl         String?
+  targetStamps    Int      @default(6) // Сколько штампов нужно для подарка (6 или 10)
+  rewardTitle     String   @default("Бесплатный кофе любого объёма")
+  cooldownMinutes Int      @default(15) // Антифрод: не чаще 1 штампа в 15 минут
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User          @relation("ShopOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  staff           ShopStaff[]
+  cards           LoyaltyCard[]
+  transactions    Transaction[]
+
+  @@index([slug])
+}
+
+model ShopStaff {
+  id        String   @id @default(uuid())
+  shopId    String
+  userId    String
+  role      Role     @default(BARISTA)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, userId])
+}
+
+model LoyaltyCard {
+  id               String   @id @default(uuid())
+  customerId       String
+  shopId           String
+  currentStamps    Int      @default(0) // Текущее кол-во незакрытых штампов (0..targetStamps-1)
+  totalStampsEarned Int     @default(0) // За всё время (для статусов/рангов)
+  rewardsAvailable Int      @default(0) // Сколько неиспользованных подарков на балансе
+  rewardsRedeemed  Int      @default(0) // Сколько подарков выпито
+  qrToken          String   @unique @default(uuid()) // Токен для QR-кода гостя
+  lastStampedAt    DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  customer         User          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  shop             Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  transactions     Transaction[]
+
+  @@unique([customerId, shopId])
+  @@index([qrToken])
+}
+
+model Transaction {
+  id            String          @id @default(uuid())
+  cardId        String
+  shopId        String
+  baristaId     String?
+  type          TransactionType
+  stampsDelta   Int             @default(0) // +1, -1 и т.д.
+  comment       String?
+  createdAt     DateTime        @default(now())
+
+  card          LoyaltyCard     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  shop          Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  barista       User?           @relation("BaristaTransactions", fields: [baristaId], references: [id], onDelete: SetNull)
+
+  @@index([shopId, createdAt])
+  @@index([baristaId])
+}
