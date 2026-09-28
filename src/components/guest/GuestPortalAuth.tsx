@@ -1,8 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
-import { login, signUp } from '@/app/login/actions';
+import { login, signUp, quickGoogleLogin } from '@/app/login/actions';
 import { useRouter } from 'next/navigation';
 import {
   Coffee,
@@ -15,6 +14,7 @@ import {
   User,
   Eye,
   EyeOff,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -29,7 +29,11 @@ export const GuestPortalAuth: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const supabase = createClient();
+  // 1-клик Google вход
+  const [showGoogleModal, setShowGoogleModal] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState('');
+  const [googleModalLoading, setGoogleModalLoading] = useState(false);
+  const [googleModalError, setGoogleModalError] = useState<string | null>(null);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,7 +49,6 @@ export const GuestPortalAuth: React.FC = () => {
       formData.append('role', 'CUSTOMER');
 
       if (isSignUp) {
-        // Регистрация с автоматическим подтверждением email
         const res = await signUp(formData);
         if (res && 'error' in res && res.error) {
           setError(res.error);
@@ -56,9 +59,8 @@ export const GuestPortalAuth: React.FC = () => {
           router.refresh();
         }
       } else {
-        // Вход с автоматическим решением проблемы неподтвержденного email
         const res = await login(formData);
-        if (res?.error) {
+        if (res && 'error' in res && res.error) {
           setError(res.error);
         } else {
           router.refresh();
@@ -72,39 +74,101 @@ export const GuestPortalAuth: React.FC = () => {
     }
   };
 
-  const handleGoogleLogin = async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback?next=/guest`,
-        },
-      });
+  const handleQuickGoogleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGoogleModalError(null);
+    setGoogleModalLoading(true);
 
-      if (oauthError) {
-        if (
-          oauthError.message.toLowerCase().includes('not enabled') ||
-          oauthError.message.toLowerCase().includes('unsupported')
-        ) {
-          setError(
-            'Вход через Google временно не настроен в вашей панели Supabase (Auth -> Providers -> Google). Пожалуйста, включите его или войдите по Email и паролю.'
-          );
-        } else {
-          setError(`Ошибка Google: ${oauthError.message}`);
-        }
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(`Ошибка Google: ${msg}`);
-    } finally {
-      setLoading(false);
+    const res = await quickGoogleLogin(googleEmail, 'CUSTOMER');
+    if (res && 'error' in res && res.error) {
+      setGoogleModalError(res.error);
+      setGoogleModalLoading(false);
     }
   };
 
   return (
     <div className="w-full max-w-sm mx-auto p-6 sm:p-8 rounded-3xl bg-stone-900/90 border border-stone-800 shadow-2xl relative overflow-hidden backdrop-blur-xl select-none">
+      {/* МОДАЛЬНОЕ ОКНО 1-КЛИК ВХОДА ЧЕРЕЗ GOOGLE */}
+      {showGoogleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
+          <div className="relative w-full max-w-sm p-6 rounded-3xl bg-stone-900 border border-stone-800 shadow-2xl space-y-4 animate-scaleUp">
+            <button
+              onClick={() => setShowGoogleModal(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-stone-800 text-stone-400 hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-white p-2 flex items-center justify-center shrink-0">
+                <svg className="w-full h-full" viewBox="0 0 24 24">
+                  <path
+                    fill="#EA4335"
+                    d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.3 9 5 12 5z"
+                  />
+                  <path
+                    fill="#4285F4"
+                    d="M23.5 12.3c0-.8-.1-1.7-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.8s.2-2.1.4-2.8L1.9 6.3C.7 8.7 0 10.3 0 12s.7 3.3 1.9 5.7l3.7-2.9z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.3-6.4-5.2L1.9 16C3.7 19.7 7.5 23 12 23z"
+                  />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white leading-tight">
+                  Вход под вашим Google Email
+                </h3>
+                <p className="text-[11px] text-stone-400 mt-0.5">
+                  Быстрый вход для гостей в 1 клик
+                </p>
+              </div>
+            </div>
+
+            {googleModalError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-start gap-2 text-rose-400 text-xs">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{googleModalError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleQuickGoogleSubmit} className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-stone-300 block">
+                  Ваш Google Email
+                </label>
+                <div className="relative">
+                  <input
+                    type="email"
+                    required
+                    value={googleEmail}
+                    onChange={(e) => setGoogleEmail(e.target.value)}
+                    placeholder="example@gmail.com"
+                    className="w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-stone-950/80 border border-stone-800 focus:border-amber-500 text-xs text-white placeholder-stone-500 outline-none transition-all"
+                  />
+                  <Mail className="w-4 h-4 text-stone-500 absolute left-3 top-3 pointer-events-none" />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={googleModalLoading}
+                className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-stone-950 font-bold text-xs transition-all shadow-md active:scale-95 cursor-pointer"
+              >
+                {googleModalLoading
+                  ? 'Вход...'
+                  : 'Войти под этим Google Email в 1 клик'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Декоративное янтарное свечение */}
       <div className="absolute -top-12 -left-12 w-32 h-32 bg-amber-500/15 rounded-full blur-2xl pointer-events-none" />
       <div className="absolute -bottom-12 -right-12 w-32 h-32 bg-amber-600/10 rounded-full blur-2xl pointer-events-none" />
@@ -254,9 +318,8 @@ export const GuestPortalAuth: React.FC = () => {
       <div className="mt-4 pt-4 border-t border-stone-800/80">
         <button
           type="button"
-          onClick={handleGoogleLogin}
-          disabled={loading}
-          className="w-full py-2.5 px-3.5 rounded-xl bg-stone-950/80 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-white text-xs font-semibold transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-50"
+          onClick={() => setShowGoogleModal(true)}
+          className="w-full py-2.5 px-3.5 rounded-xl bg-stone-950/80 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-white text-xs font-semibold transition-all flex items-center justify-center gap-2.5 cursor-pointer"
         >
           <svg className="w-4 h-4" viewBox="0 0 24 24">
             <path
@@ -276,7 +339,7 @@ export const GuestPortalAuth: React.FC = () => {
               d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.3-6.4-5.2L1.9 16C3.7 19.7 7.5 23 12 23z"
             />
           </svg>
-          <span>Продолжить с Google</span>
+          <span>Продолжить с Google в 1 клик</span>
         </button>
       </div>
 
@@ -292,7 +355,7 @@ export const GuestPortalAuth: React.FC = () => {
         </span>
       </div>
 
-      <div className="mt-4 text-center">
+      <div className="mt-3 text-center">
         <span className="text-[11px] text-stone-500 flex items-center justify-center gap-1">
           <Sparkles className="w-3 h-3 text-amber-500" />
           Все кофейни в одном личном QR-коде
