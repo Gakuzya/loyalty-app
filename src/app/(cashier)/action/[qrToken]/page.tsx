@@ -3,18 +3,9 @@ import prisma from '@/lib/prisma';
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import {
-  Coffee,
-  QrCode,
-  User,
-  Gift,
-  AlertTriangle,
-  ArrowLeft,
-  Crown,
-  MapPin,
-} from 'lucide-react';
-import { revalidatePath } from 'next/cache';
-import { calculateCustomerStamps, calculateTier, TIER_CONFIG } from '@/lib/loyalty';
+import { ArrowLeft } from 'lucide-react';
+import { calculateCustomerStamps, calculateTier } from '@/lib/loyalty';
+import { CashierActionView } from '@/components/cashier/CashierActionView';
 
 interface ActionPageProps {
   params: Promise<{
@@ -80,7 +71,6 @@ export default async function ActionPage({ params }: ActionPageProps) {
   }
 
   if (!activeBranch) {
-    // Резервный поиск первого филиала в системе
     const fallbackBranch = await prisma.branch.findFirst({
       include: { network: true },
     });
@@ -112,7 +102,6 @@ export default async function ActionPage({ params }: ActionPageProps) {
   });
 
   if (!customer) {
-    // Пробуем найти по email или создаем временную запись
     customer = await prisma.user.create({
       data: {
         id: customerId,
@@ -123,104 +112,27 @@ export default async function ActionPage({ params }: ActionPageProps) {
     });
   }
 
-  const validCustomer = customer;
-  const validBranch = activeBranch;
-
   // 4. Загружаем транзакции клиента в данном филиале
   const transactions = await prisma.transaction.findMany({
     where: {
-      customerId: validCustomer.id,
-      branchId: validBranch.id,
+      customerId: customer.id,
+      branchId: activeBranch.id,
     },
   });
 
   const stats = calculateCustomerStamps(
     transactions,
-    validBranch.network.targetStamps
+    activeBranch.network.targetStamps
   );
 
   // 5. Все транзакции гостя по всей сети для определения Tier
   const allGuestEarnedTxs = await prisma.transaction.count({
     where: {
-      customerId: validCustomer.id,
+      customerId: customer.id,
       type: 'EARN_STAMP',
     },
   });
   const guestTier = calculateTier(allGuestEarnedTxs);
-  const tierInfo = TIER_CONFIG[guestTier];
-
-  // Server Action: Начислить 1 штамп
-  async function awardStamp() {
-    'use server';
-
-    const sb = await createClient();
-    const {
-      data: { user: currentUser },
-    } = await sb.auth.getUser();
-
-    if (!currentUser) {
-      redirect('/login');
-    }
-
-    // Записываем транзакцию
-    await prisma.transaction.create({
-      data: {
-        type: 'EARN_STAMP',
-        customerId: validCustomer.id,
-        baristaId: currentUser.id,
-        branchId: validBranch.id,
-      },
-    });
-
-    // Пересчитываем общий тир гостя
-    const newTotal = allGuestEarnedTxs + 1;
-    const newTier = calculateTier(newTotal);
-    if (newTier !== validCustomer.tier) {
-      await prisma.user.update({
-        where: { id: validCustomer.id },
-        data: { tier: newTier },
-      });
-    }
-
-    revalidatePath(`/action/${encodeURIComponent(qrToken)}`);
-    revalidatePath('/scan');
-    revalidatePath('/guest');
-    revalidatePath('/dashboard');
-    revalidatePath('/kpi');
-  }
-
-  // Server Action: Списать бесплатный кофе
-  async function redeemReward() {
-    'use server';
-
-    const sb = await createClient();
-    const {
-      data: { user: currentUser },
-    } = await sb.auth.getUser();
-
-    if (!currentUser) {
-      redirect('/login');
-    }
-
-    if (stats.rewardsAvailable <= 0) return;
-
-    await prisma.transaction.create({
-      data: {
-        type: 'REDEEM_REWARD',
-        customerId: validCustomer.id,
-        baristaId: currentUser.id,
-        branchId: validBranch.id,
-      },
-    });
-
-    revalidatePath(`/action/${encodeURIComponent(qrToken)}`);
-    revalidatePath('/scan');
-    revalidatePath('/guest');
-    revalidatePath('/dashboard');
-  }
-
-  const isRewardReady = stats.rewardsAvailable > 0;
-  const targetStamps = activeBranch.network.targetStamps;
 
   return (
     <div className="min-h-screen bg-[#0f0d0c] text-stone-100 flex flex-col justify-between p-4 sm:p-6 select-none">
@@ -237,105 +149,27 @@ export default async function ActionPage({ params }: ActionPageProps) {
         </span>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-center max-w-md mx-auto w-full space-y-4 py-4">
-        {/* Карточка информации о госте */}
-        <div className="w-full p-5 rounded-3xl bg-stone-900/90 border border-stone-800 shadow-2xl space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-stone-800 border border-stone-700/60 flex items-center justify-center text-amber-400 font-bold">
-                {customer.name?.charAt(0) || <User className="w-6 h-6" />}
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-base font-bold text-white">
-                    {customer.name || 'Любимый гость'}
-                  </h2>
-                  <span
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${tierInfo.badgeColor}`}
-                  >
-                    <Crown className="w-3 h-3" />
-                    <span>{tierInfo.title}</span>
-                  </span>
-                </div>
-                <p className="text-xs text-stone-400">
-                  {customer.email}
-                </p>
-              </div>
-            </div>
-            <div className="text-right">
-              <span className="text-[10px] uppercase tracking-wider text-stone-500 block">
-                Филиал
-              </span>
-              <span className="text-xs font-semibold text-amber-400">
-                {activeBranch.name}
-              </span>
-            </div>
-          </div>
-
-          {/* Баланс штампов и подарков */}
-          <div className="grid grid-cols-2 gap-3 pt-2">
-            <div className="p-3.5 rounded-2xl bg-stone-950/60 border border-stone-800 text-center">
-              <span className="text-[11px] text-stone-400 block mb-1">
-                Штампы филиала
-              </span>
-              <div className="text-2xl font-black text-white">
-                {stats.currentStamps}{' '}
-                <span className="text-stone-500 text-sm font-semibold">
-                  / {targetStamps}
-                </span>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-center">
-              <span className="text-[11px] text-amber-400 block mb-1">
-                Подарков на балансе
-              </span>
-              <div className="text-2xl font-black text-amber-400">
-                {stats.rewardsAvailable} ☕
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Кнопки действий */}
-        <div className="w-full space-y-3 pt-2">
-          <form action={awardStamp} className="w-full">
-            <button
-              type="submit"
-              className="w-full py-4 px-5 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-[0.98] text-stone-950 font-extrabold text-base transition-all shadow-xl shadow-amber-600/20 flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Coffee className="w-5 h-5 stroke-[2.5]" />
-              <span>Начислить +1 Штамп</span>
-            </button>
-          </form>
-
-          <form action={redeemReward} className="w-full">
-            <button
-              type="submit"
-              disabled={!isRewardReady}
-              className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
-                isRewardReady
-                  ? 'bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] text-stone-950 shadow-lg shadow-emerald-500/20 cursor-pointer'
-                  : 'bg-stone-900 border border-stone-800 text-stone-500 cursor-not-allowed'
-              }`}
-            >
-              <Gift className="w-4 h-4" />
-              <span>
-                {isRewardReady
-                  ? `Списать «${activeBranch.network.rewardTitle}»`
-                  : 'Нет доступных подарков для списания'}
-              </span>
-            </button>
-          </form>
-
-          <Link
-            href="/scan"
-            className="w-full py-3 px-4 rounded-xl bg-stone-900/60 border border-stone-800/80 hover:bg-stone-800 text-stone-300 text-xs font-semibold flex items-center justify-center gap-2 transition-all"
-          >
-            <QrCode className="w-4 h-4" />
-            <span>Сканировать следующего гостя</span>
-          </Link>
-        </div>
+      <main className="flex-1 flex flex-col items-center justify-center max-w-md mx-auto w-full py-4">
+        <CashierActionView
+          customer={{
+            id: customer.id,
+            name: customer.name || 'Любимый гость',
+            email: customer.email,
+            tier: guestTier,
+            totalStamps: allGuestEarnedTxs,
+          }}
+          branch={{
+            id: activeBranch.id,
+            name: activeBranch.name,
+            targetStamps: activeBranch.network.targetStamps,
+            rewardTitle: activeBranch.network.rewardTitle,
+          }}
+          initialStats={{
+            currentStamps: stats.currentStamps,
+            rewardsAvailable: stats.rewardsAvailable,
+          }}
+          baristaEmail={authUser.email}
+        />
       </main>
 
       <footer className="max-w-md mx-auto w-full text-center text-[11px] text-stone-500 py-2">

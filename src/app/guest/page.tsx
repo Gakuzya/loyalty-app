@@ -126,6 +126,13 @@ export default async function GuestPage() {
     };
   });
 
+  const initialHistory = transactions.slice(0, 8).map((tx) => ({
+    id: tx.id,
+    type: tx.type,
+    branchName: tx.branch.name,
+    createdAt: tx.createdAt.toISOString(),
+  }));
+
   return (
     <div className="min-h-screen bg-[#0f0d0c] text-stone-100 flex flex-col justify-between p-4 sm:p-6 select-none">
       <header className="max-w-md mx-auto w-full flex items-center justify-between py-2">
@@ -151,6 +158,7 @@ export default async function GuestPage() {
             totalStamps,
           }}
           branches={branches}
+          initialHistory={initialHistory}
         />
       </main>
 

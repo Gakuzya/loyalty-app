@@ -1,9 +1,19 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Coffee, QrCode, Gift, MapPin, Sparkles } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  Coffee,
+  QrCode,
+  Gift,
+  MapPin,
+  Sparkles,
+  PartyPopper,
+  X,
+} from 'lucide-react';
 import { StampGrid } from './StampGrid';
 import { GuestQR } from './GuestQR';
+import { createClient } from '@/lib/supabase/client';
+import confetti from 'canvas-confetti';
 
 interface GuestCardClientProps {
   shop: {
@@ -25,10 +35,17 @@ interface GuestCardClientProps {
 
 export const GuestCardClient: React.FC<GuestCardClientProps> = ({
   shop,
-  card,
+  card: initialCard,
 }) => {
   const [activeTab, setActiveTab] = useState<'card' | 'qr'>('card');
-  const currentStamps = card.currentStamps;
+  const [currentStamps, setCurrentStamps] = useState(initialCard.currentStamps);
+  const [rewardsAvailable, setRewardsAvailable] = useState(
+    initialCard.rewardsAvailable
+  );
+  const [showCelebration, setShowCelebration] = useState(false);
+
+  const supabase = createClient();
+  const customerId = initialCard.qrToken.replace('guest:', '').trim();
   const targetStamps = shop.targetStamps;
 
   const progressPercent = Math.min(
@@ -36,8 +53,132 @@ export const GuestCardClient: React.FC<GuestCardClientProps> = ({
     Math.round((currentStamps / targetStamps) * 100)
   );
 
+  // 1. Live Realtime синхронизация через Supabase Broadcast
+  useEffect(() => {
+    if (!customerId || customerId.startsWith('anonymous')) return;
+
+    const channel = supabase
+      .channel('loyalty-live-events')
+      .on('broadcast', { event: 'stamp-update' }, ({ payload }) => {
+        if (!payload || payload.customerId !== customerId) return;
+
+        if (payload.branchId === shop.id) {
+          setCurrentStamps(payload.currentStamps);
+          setRewardsAvailable(payload.rewardsAvailable);
+
+          if (payload.action === 'EARN_STAMP' && payload.rewardsAvailable > 0) {
+            try {
+              confetti({
+                particleCount: 100,
+                spread: 70,
+                origin: { y: 0.5 },
+              });
+            } catch (e) {
+              // ignore
+            }
+            setShowCelebration(true);
+          }
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [customerId, shop.id, supabase]);
+
+  // 2. Фоновый polling для гарантированного обновления без F5
+  useEffect(() => {
+    if (!customerId || customerId.startsWith('anonymous')) return;
+
+    const poll = async () => {
+      if (document.hidden) return;
+      try {
+        const res = await fetch(`/api/guest/status?userId=${customerId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const thisBranch = data.branches?.find(
+          (b: any) => b.branchId === shop.id
+        );
+        if (thisBranch) {
+          setCurrentStamps(thisBranch.currentStamps);
+          setRewardsAvailable(thisBranch.rewardsAvailable);
+        }
+      } catch (e) {
+        // silent
+      }
+    };
+
+    const interval = setInterval(poll, 3000);
+    return () => clearInterval(interval);
+  }, [customerId, shop.id]);
+
   return (
-    <div className="w-full max-w-sm mx-auto flex flex-col space-y-4">
+    <div className="w-full max-w-sm mx-auto flex flex-col space-y-4 select-none relative">
+      {/* МОДАЛКА ПРАЗДНОВАНИЯ БЕСПЛАТНОГО НАПИТКА */}
+      {showCelebration && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
+          <div className="relative w-full max-w-sm p-6 rounded-3xl bg-gradient-to-b from-stone-900 to-stone-950 border-2 border-amber-500 shadow-2xl text-center space-y-4 animate-scaleUp">
+            <button
+              onClick={() => setShowCelebration(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-stone-800 text-stone-400 hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-amber-400 to-amber-600 text-stone-950 flex items-center justify-center mx-auto shadow-xl shadow-amber-500/30 animate-bounce">
+              <Gift className="w-9 h-9 stroke-[2.5]" />
+            </div>
+
+            <div className="space-y-1">
+              <span className="text-xs font-black uppercase tracking-widest text-amber-400 block">
+                Ура! Вы накопили все штампы!
+              </span>
+              <h2 className="text-2xl font-black text-white tracking-tight">
+                ВАШ 6-Й НАПИТОК — БЕСПЛАТНЫЙ! ☕
+              </h2>
+              <p className="text-xs text-stone-300 pt-1">
+                Карточка в «{shop.name}» закрыта!
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 font-semibold">
+              Покажите бариста этот экран или переключитесь на QR-код для получения бесплатного напитка!
+            </div>
+
+            <button
+              onClick={() => {
+                setShowCelebration(false);
+                setActiveTab('qr');
+              }}
+              className="w-full py-3.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-stone-950 font-black text-xs transition-all shadow-lg shadow-amber-600/30 cursor-pointer"
+            >
+              ОТКРЫТЬ QR-КОД ДЛЯ ПОДАРКА
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ОГРОМНЫЙ БАННЕР БЕСПЛАТНОГО НАПИТКА */}
+      {rewardsAvailable > 0 && (
+        <div className="p-4 rounded-3xl bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 text-stone-950 shadow-2xl shadow-emerald-500/30 border-2 border-emerald-300 flex items-center gap-3">
+          <div className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0">
+            <Gift className="w-6 h-6 text-white stroke-[2.5]" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-950 block">
+              Готов к выдаче!
+            </span>
+            <h3 className="text-sm font-black text-white leading-tight">
+              ВАШ 6-Й НАПИТОК — БЕСПЛАТНЫЙ! ☕
+            </h3>
+            <p className="text-[11px] text-white/90">
+              Покажите QR-код бариста для списания
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Шапка кофейни с переключателем табов */}
       <div className="flex items-center justify-between p-4 rounded-3xl bg-stone-900/80 border border-stone-800 backdrop-blur-md shadow-xl">
         <div className="flex items-center gap-3 min-w-0">
@@ -114,7 +255,7 @@ export const GuestCardClient: React.FC<GuestCardClientProps> = ({
             </div>
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-amber-500">
-                Ваша награда
+                Ваша награда за 6 штампов
               </div>
               <div className="text-xs font-medium text-stone-200 mt-0.5">
                 {shop.rewardTitle}
@@ -123,17 +264,19 @@ export const GuestCardClient: React.FC<GuestCardClientProps> = ({
           </div>
         </div>
       ) : (
-        <GuestQR qrToken={card.qrToken} shopName={shop.name} />
+        <GuestQR qrToken={initialCard.qrToken} shopName={shop.name} />
       )}
 
       {/* Подсказка для гостя */}
       <div className="p-3.5 rounded-2xl bg-stone-900/40 border border-stone-800/60 text-center text-xs text-stone-400">
         {activeTab === 'card' ? (
           <span>
-            Нажмите на иконку <QrCode className="w-3.5 h-3.5 inline text-amber-400" /> сверху, чтобы открыть QR-код на кассе
+            Нажмите на иконку{' '}
+            <QrCode className="w-3.5 h-3.5 inline text-amber-400" /> сверху,
+            чтобы открыть QR-код на кассе
           </span>
         ) : (
-          <span>Покажите экран бариста — штамп начислится мгновенно</span>
+          <span>Покажите экран бариста — штамп начислится в реальном времени</span>
         )}
       </div>
     </div>
