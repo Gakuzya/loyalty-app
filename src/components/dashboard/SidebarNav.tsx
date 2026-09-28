@@ -3,7 +3,14 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BarChart3, Users, Settings } from 'lucide-react';
+import {
+  BarChart3,
+  Store,
+  UserCheck,
+  Target,
+  Users,
+  Settings,
+} from 'lucide-react';
 
 export const SidebarNav: React.FC = () => {
   const pathname = usePathname();
@@ -16,6 +23,24 @@ export const SidebarNav: React.FC = () => {
       exact: true,
     },
     {
+      href: '/branches',
+      label: 'Филиалы сети',
+      icon: Store,
+      exact: false,
+    },
+    {
+      href: '/staff',
+      label: 'Персонал (Бариста)',
+      icon: UserCheck,
+      exact: false,
+    },
+    {
+      href: '/kpi',
+      label: 'KPI и Мотивация',
+      icon: Target,
+      exact: false,
+    },
+    {
       href: '/guests',
       label: 'База гостей',
       icon: Users,
@@ -23,7 +48,7 @@ export const SidebarNav: React.FC = () => {
     },
     {
       href: '/settings',
-      label: 'Настройки лояльности',
+      label: 'Настройки сети',
       icon: Settings,
       exact: false,
     },

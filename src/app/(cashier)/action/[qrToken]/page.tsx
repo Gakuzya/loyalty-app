@@ -3,8 +3,18 @@ import prisma from '@/lib/prisma';
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { Coffee, ChevronLeft, QrCode, User, Gift, AlertTriangle, ArrowLeft, Sparkles } from 'lucide-react';
+import {
+  Coffee,
+  QrCode,
+  User,
+  Gift,
+  AlertTriangle,
+  ArrowLeft,
+  Crown,
+  MapPin,
+} from 'lucide-react';
 import { revalidatePath } from 'next/cache';
+import { calculateCustomerStamps, calculateTier, TIER_CONFIG } from '@/lib/loyalty';
 
 interface ActionPageProps {
   params: Promise<{
@@ -26,90 +36,118 @@ export default async function ActionPage({ params }: ActionPageProps) {
     redirect('/login');
   }
 
-  // 2. Определяем заведение бариста (где он владелец или сотрудник)
-  let baristaShop = await prisma.shop.findFirst({
-    where: {
-      OR: [
-        { ownerId: authUser.id },
-        { staff: { some: { userId: authUser.id } } },
-      ],
+  // 2. Находим текущего сотрудника в базе и определяем его филиал
+  let baristaUser = await prisma.user.findUnique({
+    where: { id: authUser.id },
+    include: {
+      branch: {
+        include: { network: true },
+      },
+      network: {
+        include: { branches: true },
+      },
     },
   });
 
-  if (!baristaShop) {
-    // Резерв: первое заведение в базе
-    baristaShop = await prisma.shop.findFirst();
-  }
-
-  // 3. Поиск карты лояльности (по прямому qrToken или по универсальному guest:userId)
-  let card = null;
-
-  if (qrToken.startsWith('guest:')) {
-    const customerId = qrToken.replace('guest:', '');
-    if (baristaShop) {
-      card = await prisma.loyaltyCard.findUnique({
-        where: {
-          customerId_shopId: {
-            customerId,
-            shopId: baristaShop.id,
-          },
-        },
-        include: {
-          customer: true,
-          shop: true,
-        },
-      });
-
-      // Если гость пришел в эту кофейню впервые — автоматически создаем карту
-      if (!card) {
-        const customer = await prisma.user.findUnique({ where: { id: customerId } });
-        if (customer) {
-          card = await prisma.loyaltyCard.create({
-            data: {
-              customerId,
-              shopId: baristaShop.id,
-              currentStamps: 0,
-              rewardsAvailable: 0,
-            },
-            include: {
-              customer: true,
-              shop: true,
-            },
-          });
-        }
-      }
-    }
-  } else {
-    // Поиск по стандартному уникальному токену карты
-    card = await prisma.loyaltyCard.findUnique({
-      where: { qrToken },
+  if (!baristaUser && authUser.email) {
+    baristaUser = await prisma.user.create({
+      data: {
+        id: authUser.id,
+        email: authUser.email,
+        name:
+          authUser.user_metadata?.full_name ||
+          authUser.email.split('@')[0],
+        role: 'BARISTA',
+      },
       include: {
-        customer: true,
-        shop: true,
+        branch: {
+          include: { network: true },
+        },
+        network: {
+          include: { branches: true },
+        },
       },
     });
   }
 
-  if (!card) {
+  // Филиал, в котором работает бариста (или первый филиал сети владельца)
+  let activeBranch = baristaUser?.branch;
+  if (!activeBranch && baristaUser?.network?.branches?.length) {
+    activeBranch = {
+      ...baristaUser.network.branches[0],
+      network: baristaUser.network,
+    };
+  }
+
+  if (!activeBranch) {
+    // Резервный поиск первого филиала в системе
+    const fallbackBranch = await prisma.branch.findFirst({
+      include: { network: true },
+    });
+    activeBranch = fallbackBranch;
+  }
+
+  if (!activeBranch) {
     return (
       <div className="min-h-screen bg-[#0f0d0c] text-stone-100 flex flex-col items-center justify-center p-6 text-center select-none">
-        <div className="w-16 h-16 rounded-3xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center mb-4 shadow-xl">
-          <AlertTriangle className="w-8 h-8" />
-        </div>
-        <h1 className="text-xl font-bold text-white mb-2">Карта не найдена</h1>
+        <h1 className="text-xl font-bold text-white mb-2">Филиал не найден</h1>
         <p className="text-xs text-stone-400 max-w-xs mb-6">
-          QR-код <span className="font-mono text-amber-400">{qrToken}</span> не зарегистрирован в системе лояльности.
+          Создайте хотя бы один филиал в панели владельца для работы кассы.
         </p>
         <Link
-          href="/scan"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs font-bold transition-all shadow-md"
+          href="/dashboard"
+          className="px-5 py-2.5 rounded-2xl bg-amber-500 text-stone-950 text-xs font-bold"
         >
-          <QrCode className="w-4 h-4" />
-          <span>Сканировать заново</span>
+          В дашборд
         </Link>
       </div>
     );
   }
+
+  // 3. Извлекаем ID клиента
+  const customerId = qrToken.replace('guest:', '').trim();
+
+  let customer = await prisma.user.findUnique({
+    where: { id: customerId },
+  });
+
+  if (!customer) {
+    // Пробуем найти по email или создаем временную запись
+    customer = await prisma.user.create({
+      data: {
+        id: customerId,
+        email: `guest-${customerId.slice(0, 8)}@loyaltyhub.local`,
+        name: `Гость #${customerId.slice(0, 4)}`,
+        role: 'CUSTOMER',
+      },
+    });
+  }
+
+  const validCustomer = customer;
+  const validBranch = activeBranch;
+
+  // 4. Загружаем транзакции клиента в данном филиале
+  const transactions = await prisma.transaction.findMany({
+    where: {
+      customerId: validCustomer.id,
+      branchId: validBranch.id,
+    },
+  });
+
+  const stats = calculateCustomerStamps(
+    transactions,
+    validBranch.network.targetStamps
+  );
+
+  // 5. Все транзакции гостя по всей сети для определения Tier
+  const allGuestEarnedTxs = await prisma.transaction.count({
+    where: {
+      customerId: validCustomer.id,
+      type: 'EARN_STAMP',
+    },
+  });
+  const guestTier = calculateTier(allGuestEarnedTxs);
+  const tierInfo = TIER_CONFIG[guestTier];
 
   // Server Action: Начислить 1 штамп
   async function awardStamp() {
@@ -124,63 +162,31 @@ export default async function ActionPage({ params }: ActionPageProps) {
       redirect('/login');
     }
 
-    const current = await prisma.loyaltyCard.findUnique({
-      where: { id: card!.id },
-      include: { shop: true },
-    });
-
-    if (!current) return;
-
-    const newStamps = current.currentStamps + 1;
-    let earnedReward = false;
-    let updatedStamps = newStamps;
-    let rewardsDelta = 0;
-
-    if (newStamps >= current.shop.targetStamps) {
-      earnedReward = true;
-      updatedStamps = 0;
-      rewardsDelta = 1;
-    }
-
-    await prisma.loyaltyCard.update({
-      where: { id: current.id },
-      data: {
-        currentStamps: updatedStamps,
-        totalStampsEarned: { increment: 1 },
-        rewardsAvailable: { increment: rewardsDelta },
-        lastStampedAt: new Date(),
-      },
-    });
-
-    await prisma.user.upsert({
-      where: { id: currentUser.id },
-      update: {},
-      create: {
-        id: currentUser.id,
-        email: currentUser.email,
-        fullName:
-          currentUser.user_metadata?.full_name ||
-          currentUser.email?.split('@')[0] ||
-          'Сотрудник',
-        role: 'BARISTA',
-      },
-    });
-
+    // Записываем транзакцию
     await prisma.transaction.create({
       data: {
-        cardId: current.id,
-        shopId: current.shopId,
+        type: 'EARN_STAMP',
+        customerId: validCustomer.id,
         baristaId: currentUser.id,
-        type: earnedReward ? 'REWARD_EARNED' : 'STAMP_ADDED',
-        stampsDelta: 1,
-        comment: earnedReward ? 'Получен бесплатный кофе!' : '+1 штамп за покупку',
+        branchId: validBranch.id,
       },
     });
 
+    // Пересчитываем общий тир гостя
+    const newTotal = allGuestEarnedTxs + 1;
+    const newTier = calculateTier(newTotal);
+    if (newTier !== validCustomer.tier) {
+      await prisma.user.update({
+        where: { id: validCustomer.id },
+        data: { tier: newTier },
+      });
+    }
+
     revalidatePath(`/action/${encodeURIComponent(qrToken)}`);
-    revalidatePath(`/card/${current.shop.slug}`);
-    revalidatePath('/dashboard');
+    revalidatePath('/scan');
     revalidatePath('/guest');
+    revalidatePath('/dashboard');
+    revalidatePath('/kpi');
   }
 
   // Server Action: Списать бесплатный кофе
@@ -196,39 +202,25 @@ export default async function ActionPage({ params }: ActionPageProps) {
       redirect('/login');
     }
 
-    const current = await prisma.loyaltyCard.findUnique({
-      where: { id: card!.id },
-    });
-
-    if (!current || current.rewardsAvailable <= 0) return;
-
-    await prisma.loyaltyCard.update({
-      where: { id: current.id },
-      data: {
-        rewardsAvailable: { decrement: 1 },
-        rewardsRedeemed: { increment: 1 },
-      },
-    });
+    if (stats.rewardsAvailable <= 0) return;
 
     await prisma.transaction.create({
       data: {
-        cardId: current.id,
-        shopId: current.shopId,
+        type: 'REDEEM_REWARD',
+        customerId: validCustomer.id,
         baristaId: currentUser.id,
-        type: 'REWARD_REDEEMED',
-        stampsDelta: 0,
-        comment: 'Списан бесплатный напиток гостю',
+        branchId: validBranch.id,
       },
     });
 
     revalidatePath(`/action/${encodeURIComponent(qrToken)}`);
-    revalidatePath(`/card/${card!.shop.slug}`);
-    revalidatePath('/dashboard');
+    revalidatePath('/scan');
     revalidatePath('/guest');
+    revalidatePath('/dashboard');
   }
 
-  const isRewardReady = card.rewardsAvailable > 0;
-  const targetStamps = card.shop.targetStamps;
+  const isRewardReady = stats.rewardsAvailable > 0;
+  const targetStamps = activeBranch.network.targetStamps;
 
   return (
     <div className="min-h-screen bg-[#0f0d0c] text-stone-100 flex flex-col justify-between p-4 sm:p-6 select-none">
@@ -241,7 +233,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
           <span>К сканеру</span>
         </Link>
         <span className="text-[11px] font-semibold text-amber-500 uppercase tracking-widest bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/20">
-          Карта найдена
+          Карта гостя найдена
         </span>
       </header>
 
@@ -250,24 +242,32 @@ export default async function ActionPage({ params }: ActionPageProps) {
         <div className="w-full p-5 rounded-3xl bg-stone-900/90 border border-stone-800 shadow-2xl space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-stone-800 border border-stone-700/60 flex items-center justify-center text-stone-300">
-                <User className="w-6 h-6" />
+              <div className="w-12 h-12 rounded-2xl bg-stone-800 border border-stone-700/60 flex items-center justify-center text-amber-400 font-bold">
+                {customer.name?.charAt(0) || <User className="w-6 h-6" />}
               </div>
               <div>
-                <h2 className="text-base font-bold text-white">
-                  {card.customer.fullName || 'Гость кофейни'}
-                </h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-white">
+                    {customer.name || 'Любимый гость'}
+                  </h2>
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${tierInfo.badgeColor}`}
+                  >
+                    <Crown className="w-3 h-3" />
+                    <span>{tierInfo.title}</span>
+                  </span>
+                </div>
                 <p className="text-xs text-stone-400">
-                  {card.customer.phone || card.customer.email || 'Без номера'}
+                  {customer.email}
                 </p>
               </div>
             </div>
             <div className="text-right">
-              <span className="text-[11px] uppercase tracking-wider text-stone-500 block">
-                Заведение
+              <span className="text-[10px] uppercase tracking-wider text-stone-500 block">
+                Филиал
               </span>
               <span className="text-xs font-semibold text-amber-400">
-                {card.shop.name}
+                {activeBranch.name}
               </span>
             </div>
           </div>
@@ -276,10 +276,10 @@ export default async function ActionPage({ params }: ActionPageProps) {
           <div className="grid grid-cols-2 gap-3 pt-2">
             <div className="p-3.5 rounded-2xl bg-stone-950/60 border border-stone-800 text-center">
               <span className="text-[11px] text-stone-400 block mb-1">
-                Текущие штампы
+                Штампы филиала
               </span>
               <div className="text-2xl font-black text-white">
-                {card.currentStamps}{' '}
+                {stats.currentStamps}{' '}
                 <span className="text-stone-500 text-sm font-semibold">
                   / {targetStamps}
                 </span>
@@ -291,7 +291,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
                 Подарков на балансе
               </span>
               <div className="text-2xl font-black text-amber-400">
-                {card.rewardsAvailable} ☕
+                {stats.rewardsAvailable} ☕
               </div>
             </div>
           </div>
@@ -322,7 +322,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
               <Gift className="w-4 h-4" />
               <span>
                 {isRewardReady
-                  ? 'Списать бесплатный кофе'
+                  ? `Списать «${activeBranch.network.rewardTitle}»`
                   : 'Нет доступных подарков для списания'}
               </span>
             </button>
@@ -339,7 +339,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
       </main>
 
       <footer className="max-w-md mx-auto w-full text-center text-[11px] text-stone-500 py-2">
-        Оператор: {authUser.email} • LoyaltyHub POS
+        Оператор: {authUser.email} • {activeBranch.name}
       </footer>
     </div>
   );

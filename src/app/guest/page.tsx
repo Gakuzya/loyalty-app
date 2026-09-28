@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import prisma from '@/lib/prisma';
 import { GuestPortalAuth } from '@/components/guest/GuestPortalAuth';
 import { GuestPortalView } from '@/components/guest/GuestPortalView';
+import { calculateCustomerStamps, calculateTier } from '@/lib/loyalty';
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 
@@ -12,7 +13,7 @@ export default async function GuestPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Если гость не авторизован — показываем красивый экран входа/регистрации
+  // Если гость не авторизован — показываем экран входа/регистрации
   if (!user) {
     return (
       <div className="min-h-screen bg-[#0f0d0c] text-stone-100 flex flex-col justify-between p-4 sm:p-6 select-none">
@@ -52,7 +53,7 @@ export default async function GuestPage() {
       create: {
         id: user.id,
         email: user.email,
-        fullName:
+        name:
           user.user_metadata?.full_name ||
           user.user_metadata?.name ||
           user.email.split('@')[0],
@@ -61,17 +62,68 @@ export default async function GuestPage() {
     });
   }
 
-  // Загружаем все карточки лояльности гостя в разных кофейнях
-  const cards = await prisma.loyaltyCard.findMany({
+  // Загружаем все транзакции гостя
+  const transactions = await prisma.transaction.findMany({
     where: {
       customerId: user.id,
     },
     include: {
-      shop: true,
+      branch: {
+        include: {
+          network: true,
+        },
+      },
     },
     orderBy: {
-      updatedAt: 'desc',
+      createdAt: 'desc',
     },
+  });
+
+  // Расчет общего количества накопленных штампов и текущего уровня (Tier)
+  const totalStamps = transactions.filter((t) => t.type === 'EARN_STAMP').length;
+  const currentTier = calculateTier(totalStamps);
+
+  // Синхронизируем уровень в БД, если изменился
+  if (dbUser && dbUser.tier !== currentTier) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { tier: currentTier },
+    });
+  }
+
+  // Группируем транзакции по филиалам для отображения карточек
+  const branchMap = new Map<
+    string,
+    {
+      branch: (typeof transactions)[0]['branch'];
+      txs: typeof transactions;
+    }
+  >();
+
+  for (const tx of transactions) {
+    if (!branchMap.has(tx.branchId)) {
+      branchMap.set(tx.branchId, {
+        branch: tx.branch,
+        txs: [],
+      });
+    }
+    branchMap.get(tx.branchId)!.txs.push(tx);
+  }
+
+  const branches = Array.from(branchMap.values()).map(({ branch, txs }) => {
+    const stats = calculateCustomerStamps(txs, branch.network.targetStamps);
+    return {
+      branchId: branch.id,
+      branchName: branch.name,
+      branchSlug: branch.slug,
+      networkName: branch.network.name,
+      address: branch.address,
+      targetStamps: branch.network.targetStamps,
+      rewardTitle: branch.network.rewardTitle,
+      currentStamps: stats.currentStamps,
+      totalEarned: stats.totalEarned,
+      rewardsAvailable: stats.rewardsAvailable,
+    };
   });
 
   return (
@@ -94,9 +146,11 @@ export default async function GuestPage() {
           user={{
             id: user.id,
             email: user.email,
-            fullName: dbUser?.fullName || user.user_metadata?.full_name,
+            fullName: dbUser?.name || user.user_metadata?.full_name,
+            tier: currentTier,
+            totalStamps,
           }}
-          cards={cards}
+          branches={branches}
         />
       </main>
 

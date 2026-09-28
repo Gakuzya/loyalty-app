@@ -41,7 +41,7 @@ export default async function DashboardPage() {
       create: {
         id: user.id,
         email: user.email,
-        fullName:
+        name:
           user.user_metadata?.full_name ||
           user.user_metadata?.name ||
           user.email.split('@')[0],
@@ -50,105 +50,91 @@ export default async function DashboardPage() {
     });
   }
 
-  // 3. Получаем кофейню текущего владельца
-  let shop = await prisma.shop.findFirst({
+  // 3. Получаем сеть текущего владельца
+  let network = await prisma.network.findUnique({
     where: { ownerId: user.id },
+    include: {
+      branches: true,
+    },
   });
 
-  // Если у владельца еще нет созданной кофейни — создаем автоматически
-  if (!shop) {
-    const generatedSlug = `shop-${user.id.slice(0, 6)}`;
-    shop = await prisma.shop.create({
+  // Если у владельца еще нет сети — создаем автоматически с первым филиалом
+  if (!network) {
+    network = await prisma.network.create({
       data: {
         ownerId: user.id,
-        name: dbUser?.fullName ? `Кофейня ${dbUser.fullName}` : 'Моя Кофейня',
-        slug: generatedSlug,
-        address: 'ул. Главная, д. 1',
+        name: dbUser?.name ? `Сеть ${dbUser.name}` : 'Моя Сеть Кофеен',
         targetStamps: 6,
         rewardTitle: 'Бесплатный напиток на выбор',
-        cooldownMinutes: 15,
+        branches: {
+          create: {
+            name: 'Главный филиал',
+            slug: `branch-${user.id.slice(0, 6)}`,
+            address: 'ул. Главная, д. 1',
+          },
+        },
+      },
+      include: {
+        branches: true,
       },
     });
   }
 
-  // 4. Загрузка статистики ИСКЛЮЧИТЕЛЬНО для кофейни текущего пользователя
+  const primaryBranch = network.branches[0];
+
+  // 4. Загрузка статистики транзакций для всех филиалов этой сети
   const [
     totalStampsIssued,
-    totalRewardsEarned,
     totalRewardsRedeemed,
-    uniqueGuestsCount,
-    allStampTransactions,
-    topCustomers,
+    allTransactions,
     recentTransactions,
   ] = await Promise.all([
     // Выданные штампы
     prisma.transaction.count({
       where: {
-        shopId: shop.id,
-        type: 'STAMP_ADDED',
-      },
-    }),
-
-    // Заработанные подарки
-    prisma.transaction.count({
-      where: {
-        shopId: shop.id,
-        type: 'REWARD_EARNED',
+        branch: {
+          networkId: network.id,
+        },
+        type: 'EARN_STAMP',
       },
     }),
 
     // Списанные бесплатные подарки
     prisma.transaction.count({
       where: {
-        shopId: shop.id,
-        type: 'REWARD_REDEEMED',
+        branch: {
+          networkId: network.id,
+        },
+        type: 'REDEEM_REWARD',
       },
     }),
 
-    // Уникальные клиенты в программе лояльности этой кофейни
-    prisma.loyaltyCard.count({
-      where: {
-        shopId: shop.id,
-      },
-    }),
-
-    // Транзакции для почасового графика
+    // Все транзакции для графиков и когортного анализа
     prisma.transaction.findMany({
       where: {
-        shopId: shop.id,
-        type: 'STAMP_ADDED',
+        branch: {
+          networkId: network.id,
+        },
       },
       select: {
+        id: true,
+        type: true,
+        customerId: true,
         createdAt: true,
       },
-    }),
-
-    // Топ постоянных гостей кофейни
-    prisma.loyaltyCard.findMany({
-      where: {
-        shopId: shop.id,
-      },
-      include: {
-        customer: true,
-      },
-      orderBy: {
-        totalStampsEarned: 'desc',
-      },
-      take: 5,
     }),
 
     // Журнал последних операций
     prisma.transaction.findMany({
       where: {
-        shopId: shop.id,
+        branch: {
+          networkId: network.id,
+        },
       },
       include: {
-        card: {
-          include: {
-            customer: true,
-          },
-        },
+        customer: true,
         barista: true,
+        branch: true,
       },
       orderBy: {
         createdAt: 'desc',
@@ -157,16 +143,45 @@ export default async function DashboardPage() {
     }),
   ]);
 
-  // 5. Почасовая группировка активности (00:00 - 23:00)
+  // 5. Уникальные клиенты и группировка
+  const customerVisitsMap = new Map<string, number>();
+  const customerStampsMap = new Map<string, number>();
+
+  allTransactions.forEach((tx) => {
+    customerVisitsMap.set(
+      tx.customerId,
+      (customerVisitsMap.get(tx.customerId) || 0) + 1
+    );
+    if (tx.type === 'EARN_STAMP') {
+      customerStampsMap.set(
+        tx.customerId,
+        (customerStampsMap.get(tx.customerId) || 0) + 1
+      );
+    }
+  });
+
+  const uniqueGuestsCount = customerVisitsMap.size;
+  const repeatGuests = Array.from(customerVisitsMap.values()).filter(
+    (count) => count >= 2
+  ).length;
+
+  const retentionPercent =
+    uniqueGuestsCount > 0
+      ? Math.round((repeatGuests / uniqueGuestsCount) * 100)
+      : 0;
+
+  // 6. Почасовая группировка активности (00:00 - 23:00)
   const hourlyMap: { [hour: number]: number } = {};
   for (let i = 0; i < 24; i++) {
     hourlyMap[i] = 0;
   }
 
-  allStampTransactions.forEach((tx) => {
-    const hour = new Date(tx.createdAt).getHours();
-    hourlyMap[hour] = (hourlyMap[hour] || 0) + 1;
-  });
+  allTransactions
+    .filter((tx) => tx.type === 'EARN_STAMP')
+    .forEach((tx) => {
+      const hour = new Date(tx.createdAt).getHours();
+      hourlyMap[hour] = (hourlyMap[hour] || 0) + 1;
+    });
 
   const hourlyChartData = Array.from({ length: 24 }, (_, h) => {
     return {
@@ -175,10 +190,27 @@ export default async function DashboardPage() {
     };
   });
 
-  // Расчет Retention rate
-  const repeatGuests = topCustomers.filter((c) => c.totalStampsEarned >= 2).length;
-  const retentionPercent =
-    uniqueGuestsCount > 0 ? Math.round((repeatGuests / uniqueGuestsCount) * 100) : 0;
+  // 7. Топ-5 постоянных гостей
+  const topCustomerEntries = Array.from(customerStampsMap.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  const topUserIds = topCustomerEntries.map(([id]) => id);
+  const topUsersDb = await prisma.user.findMany({
+    where: { id: { in: topUserIds } },
+  });
+  const topUserMap = new Map(topUsersDb.map((u) => [u.id, u]));
+
+  const topCustomers = topCustomerEntries.map(([customerId, stamps]) => {
+    const userObj = topUserMap.get(customerId);
+    return {
+      id: customerId,
+      name: userObj?.name || 'Гость',
+      email: userObj?.email,
+      tier: userObj?.tier || 'BRONZE',
+      stamps,
+    };
+  });
 
   const isBrandNew = totalStampsIssued === 0 && uniqueGuestsCount === 0;
 
@@ -189,26 +221,28 @@ export default async function DashboardPage() {
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-semibold mb-1.5">
             <Sparkles className="w-3.5 h-3.5" />
-            Live Аналитика заведения
+            Live Аналитика сети
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-            {shop.name}
+            {network.name}
           </h1>
           <p className="text-xs sm:text-sm text-stone-400 mt-0.5">
-            {shop.address || 'Адрес не указан'} • Программа: {shop.targetStamps} штампов до подарка
+            Филиалов: {network.branches.length} • Правило: {network.targetStamps} штампов до подарка ({network.rewardTitle})
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <Link
-            href={`/card/${shop.slug}`}
-            target="_blank"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-stone-900 hover:bg-stone-850 border border-stone-800 text-stone-300 hover:text-white text-xs font-medium transition-all shadow-md"
-          >
-            <Store className="w-3.5 h-3.5 text-amber-400" />
-            <span>Карта гостя</span>
-            <ExternalLink className="w-3 h-3 text-stone-500" />
-          </Link>
+          {primaryBranch && (
+            <Link
+              href={`/card/${primaryBranch.slug}`}
+              target="_blank"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-stone-900 hover:bg-stone-850 border border-stone-800 text-stone-300 hover:text-white text-xs font-medium transition-all shadow-md"
+            >
+              <Store className="w-3.5 h-3.5 text-amber-400" />
+              <span>Карта филиала</span>
+              <ExternalLink className="w-3 h-3 text-stone-500" />
+            </Link>
+          )}
           <Link
             href="/scan"
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs font-bold transition-all shadow-md active:scale-95"
@@ -220,23 +254,23 @@ export default async function DashboardPage() {
       </div>
 
       {/* Онбординг-подсказка для новых заведений */}
-      {isBrandNew && (
+      {isBrandNew && primaryBranch && (
         <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-500/10 via-amber-600/10 to-transparent border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1">
             <h3 className="text-sm font-bold text-amber-400 flex items-center gap-2">
               <Sparkles className="w-4 h-4" />
-              Кофейня успешно создана!
+              Сеть успешно развернута!
             </h3>
             <p className="text-xs text-stone-300 max-w-xl">
-              Поделитесь ссылкой на карту лояльности со своими первыми гостями или откройте сканер бариста, чтобы начислить первый штамп.
+              Поделитесь ссылкой на карту филиала со своими первыми гостями или откройте сканер бариста, чтобы начислить первый штамп.
             </p>
           </div>
           <Link
-            href={`/card/${shop.slug}`}
+            href={`/card/${primaryBranch.slug}`}
             target="_blank"
             className="px-4 py-2 rounded-xl bg-amber-500 text-stone-950 font-bold text-xs hover:bg-amber-400 transition-all shrink-0 text-center"
           >
-            Открыть карту: /card/{shop.slug}
+            Открыть карту: /card/{primaryBranch.slug}
           </Link>
         </div>
       )}
@@ -257,11 +291,11 @@ export default async function DashboardPage() {
             <span className="text-3xl font-black text-white tracking-tight">
               {totalStampsIssued}
             </span>
-            <span className="text-xs text-stone-500 ml-1.5 font-medium">всего</span>
+            <span className="text-xs text-stone-500 ml-1.5 font-medium">всего по сети</span>
           </div>
           <div className="mt-2.5 flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>Данные вашей кофейни</span>
+            <span>Данные сети</span>
           </div>
         </div>
 
@@ -280,16 +314,12 @@ export default async function DashboardPage() {
               {totalRewardsRedeemed}
             </span>
             <span className="text-xs text-stone-500 ml-1.5 font-medium">
-              из {totalRewardsEarned} заработанных
+              выдано гостям
             </span>
           </div>
           <div className="mt-2.5 flex items-center gap-1.5 text-xs text-stone-400">
             <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            <span>
-              {totalRewardsEarned > 0
-                ? `${Math.round((totalRewardsRedeemed / totalRewardsEarned) * 100)}% подарков вручено`
-                : 'Подарков пока нет'}
-            </span>
+            <span>Вознаграждения постоянных гостей</span>
           </div>
         </div>
 
@@ -307,11 +337,11 @@ export default async function DashboardPage() {
             <span className="text-3xl font-black text-white tracking-tight">
               {uniqueGuestsCount}
             </span>
-            <span className="text-xs text-stone-500 ml-1.5 font-medium">клиентов с картой</span>
+            <span className="text-xs text-stone-500 ml-1.5 font-medium">уникальных клиентов</span>
           </div>
           <div className="mt-2.5 flex items-center gap-1.5 text-xs text-amber-400 font-medium">
             <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>Активные участники</span>
+            <span>Активные гости сети</span>
           </div>
         </div>
 
@@ -332,7 +362,7 @@ export default async function DashboardPage() {
             <span className="text-xs text-stone-500 ml-1.5 font-medium">постоянные</span>
           </div>
           <div className="mt-2.5 text-xs text-stone-400">
-            {repeatGuests} из {uniqueGuestsCount || 0} вернулись снова
+            {repeatGuests} из {uniqueGuestsCount || 0} вернулись повторно
           </div>
         </div>
       </div>
@@ -374,28 +404,28 @@ export default async function DashboardPage() {
 
           <div className="divide-y divide-stone-800/80">
             {topCustomers.length > 0 ? (
-              topCustomers.map((card, idx) => (
-                <div key={card.id} className="py-3 flex items-center justify-between">
+              topCustomers.map((guest, idx) => (
+                <div key={guest.id} className="py-3 flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-amber-500/10 text-amber-400 text-xs font-bold flex items-center justify-center">
                       #{idx + 1}
                     </div>
                     <div>
                       <span className="text-xs font-semibold text-white block">
-                        {card.customer.fullName || 'Гость кофейни'}
+                        {guest.name}
                       </span>
                       <span className="text-[11px] text-stone-400 font-mono">
-                        {card.customer.phone || card.customer.email || 'ID: ' + card.id.slice(0, 8)}
+                        {guest.email || 'ID: ' + guest.id.slice(0, 8)}
                       </span>
                     </div>
                   </div>
 
                   <div className="text-right">
                     <span className="text-xs font-bold text-amber-400 block">
-                      {card.totalStampsEarned} штампов
+                      {guest.stamps} штампов
                     </span>
-                    <span className="text-[10px] text-stone-500">
-                      {card.rewardsRedeemed} подарков получено
+                    <span className="text-[10px] text-stone-500 uppercase font-semibold">
+                      Статус: {guest.tier}
                     </span>
                   </div>
                 </div>
@@ -415,7 +445,7 @@ export default async function DashboardPage() {
               <Clock className="w-4 h-4 text-amber-400" />
               <span>Журнал операций</span>
             </h2>
-            <span className="text-xs text-stone-500 font-medium">Живая лента</span>
+            <span className="text-xs text-stone-500 font-medium">Живая лента по всей сети</span>
           </div>
 
           <div className="space-y-2.5">
@@ -428,14 +458,12 @@ export default async function DashboardPage() {
                   <div className="flex items-center gap-3">
                     <div
                       className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs ${
-                        tx.type === 'REWARD_REDEEMED'
+                        tx.type === 'REDEEM_REWARD'
                           ? 'bg-emerald-500/10 text-emerald-400'
-                          : tx.type === 'REWARD_EARNED'
-                          ? 'bg-yellow-500/10 text-yellow-400'
                           : 'bg-amber-500/10 text-amber-400'
                       }`}
                     >
-                      {tx.type === 'REWARD_REDEEMED' ? (
+                      {tx.type === 'REDEEM_REWARD' ? (
                         <Gift className="w-4 h-4" />
                       ) : (
                         <Coffee className="w-4 h-4" />
@@ -443,11 +471,12 @@ export default async function DashboardPage() {
                     </div>
                     <div>
                       <span className="text-xs font-semibold text-stone-200 block">
-                        {tx.comment || tx.type}
+                        {tx.type === 'REDEEM_REWARD' ? 'Выдача подарка' : 'Начисление штампа'}
                       </span>
                       <span className="text-[10px] text-stone-500">
-                        Гость: {tx.card?.customer?.fullName || 'Посетитель'}
-                        {tx.barista?.fullName && ` • Бариста: ${tx.barista.fullName}`}
+                        Гость: {tx.customer?.name || tx.customer?.email?.split('@')[0] || 'Клиент'}
+                        {tx.barista?.name && ` • Бариста: ${tx.barista.name}`}
+                        {tx.branch?.name && ` • ${tx.branch.name}`}
                       </span>
                     </div>
                   </div>
@@ -455,10 +484,10 @@ export default async function DashboardPage() {
                   <div className="text-right">
                     <span
                       className={`text-xs font-bold block ${
-                        tx.stampsDelta > 0 ? 'text-amber-400' : 'text-stone-400'
+                        tx.type === 'EARN_STAMP' ? 'text-amber-400' : 'text-emerald-400'
                       }`}
                     >
-                      {tx.stampsDelta > 0 ? `+${tx.stampsDelta} штамп` : '☕ кофе'}
+                      {tx.type === 'EARN_STAMP' ? '+1 штамп' : '☕ подарок'}
                     </span>
                     <span className="text-[10px] text-stone-500">
                       {new Date(tx.createdAt).toLocaleTimeString('ru-RU', {
