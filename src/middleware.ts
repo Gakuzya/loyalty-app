@@ -41,6 +41,8 @@ export async function middleware(request: NextRequest) {
   // Закрытые маршруты для персонала
   const isStaffProtectedPath =
     path.startsWith('/dashboard') ||
+    path.startsWith('/guests') ||
+    path.startsWith('/settings') ||
     path.startsWith('/scan') ||
     path.startsWith('/action');
 
