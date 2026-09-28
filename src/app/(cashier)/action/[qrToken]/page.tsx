@@ -1,9 +1,10 @@
 import React from 'react';
 import prisma from '@/lib/prisma';
-import Link from 'next/link';
-import { Coffee, ChevronLeft, QrCode, User, CheckCircle2, Gift, AlertTriangle, ArrowLeft } from 'lucide-react';
-import { revalidatePath } from 'next/cache';
+import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
+import { Coffee, ChevronLeft, QrCode, User, Gift, AlertTriangle, ArrowLeft } from 'lucide-react';
+import { revalidatePath } from 'next/cache';
 
 interface ActionPageProps {
   params: Promise<{
@@ -14,7 +15,17 @@ interface ActionPageProps {
 export default async function ActionPage({ params }: ActionPageProps) {
   const { qrToken } = await params;
 
-  // Поиск карты лояльности по уникальному токену
+  // 1. Проверяем авторизацию сотрудника
+  const supabase = await createClient();
+  const {
+    data: { user: authUser },
+  } = await supabase.auth.getUser();
+
+  if (!authUser) {
+    redirect('/login');
+  }
+
+  // 2. Поиск карты лояльности по уникальному токену
   const card = await prisma.loyaltyCard.findUnique({
     where: { qrToken },
     include: {
@@ -44,9 +55,18 @@ export default async function ActionPage({ params }: ActionPageProps) {
     );
   }
 
-  // Server Action: Начислить 1 штамп
+  // Server Action: Начислить 1 штамп от имени текущего бариста
   async function awardStamp() {
     'use server';
+
+    const sb = await createClient();
+    const {
+      data: { user: currentUser },
+    } = await sb.auth.getUser();
+
+    if (!currentUser) {
+      redirect('/login');
+    }
 
     const current = await prisma.loyaltyCard.findUnique({
       where: { id: card!.id },
@@ -60,11 +80,11 @@ export default async function ActionPage({ params }: ActionPageProps) {
     let updatedStamps = newStamps;
     let rewardsDelta = 0;
 
-    // Если достигли цели (например, 6 штампов)
+    // Достигли целевого количества штампов
     if (newStamps >= current.shop.targetStamps) {
       earnedReward = true;
-      updatedStamps = 0; // Сбрасываем карточку на новый круг
-      rewardsDelta = 1;  // Добавляем 1 подарок на баланс
+      updatedStamps = 0;
+      rewardsDelta = 1;
     }
 
     // Обновляем баланс карты
@@ -78,11 +98,27 @@ export default async function ActionPage({ params }: ActionPageProps) {
       },
     });
 
-    // Записываем транзакцию для аналитики
+    // Убеждаемся, что бариста есть в таблице User Prisma
+    await prisma.user.upsert({
+      where: { id: currentUser.id },
+      update: {},
+      create: {
+        id: currentUser.id,
+        email: currentUser.email,
+        fullName:
+          currentUser.user_metadata?.full_name ||
+          currentUser.email?.split('@')[0] ||
+          'Сотрудник',
+        role: 'BARISTA',
+      },
+    });
+
+    // Фиксируем транзакцию с РЕАЛЬНЫМ ID бариста
     await prisma.transaction.create({
       data: {
         cardId: current.id,
         shopId: current.shopId,
+        baristaId: currentUser.id,
         type: earnedReward ? 'REWARD_EARNED' : 'STAMP_ADDED',
         stampsDelta: 1,
         comment: earnedReward ? 'Получен бесплатный кофе!' : '+1 штамп за покупку',
@@ -91,11 +127,21 @@ export default async function ActionPage({ params }: ActionPageProps) {
 
     revalidatePath(`/action/${qrToken}`);
     revalidatePath(`/card/${current.shop.slug}`);
+    revalidatePath('/dashboard');
   }
 
-  // Server Action: Списать подарочный кофе
+  // Server Action: Списать бесплатный кофе от имени текущего бариста
   async function redeemReward() {
     'use server';
+
+    const sb = await createClient();
+    const {
+      data: { user: currentUser },
+    } = await sb.auth.getUser();
+
+    if (!currentUser) {
+      redirect('/login');
+    }
 
     const current = await prisma.loyaltyCard.findUnique({
       where: { id: card!.id },
@@ -115,6 +161,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
       data: {
         cardId: current.id,
         shopId: current.shopId,
+        baristaId: currentUser.id,
         type: 'REWARD_REDEEMED',
         stampsDelta: 0,
         comment: 'Списан бесплатный напиток гостю',
@@ -123,6 +170,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
 
     revalidatePath(`/action/${qrToken}`);
     revalidatePath(`/card/${card!.shop.slug}`);
+    revalidatePath('/dashboard');
   }
 
   const isRewardReady = card.rewardsAvailable > 0;
@@ -130,7 +178,6 @@ export default async function ActionPage({ params }: ActionPageProps) {
 
   return (
     <div className="min-h-screen bg-[#0f0d0c] text-stone-100 flex flex-col justify-between p-4 sm:p-6 select-none">
-      {/* Навигация */}
       <header className="max-w-md mx-auto w-full flex items-center justify-between py-2">
         <Link
           href="/scan"
@@ -144,9 +191,8 @@ export default async function ActionPage({ params }: ActionPageProps) {
         </span>
       </header>
 
-      {/* Основная панель */}
       <main className="flex-1 flex flex-col items-center justify-center max-w-md mx-auto w-full space-y-4 py-4">
-        {/* Карточка гостя */}
+        {/* Карточка информации о госте */}
         <div className="w-full p-5 rounded-3xl bg-stone-900/90 border border-stone-800 shadow-2xl space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -158,7 +204,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
                   {card.customer.fullName || 'Гость кофейни'}
                 </h2>
                 <p className="text-xs text-stone-400">
-                  {card.customer.phone || 'Без номера'}
+                  {card.customer.phone || card.customer.email || 'Без номера'}
                 </p>
               </div>
             </div>
@@ -197,9 +243,8 @@ export default async function ActionPage({ params }: ActionPageProps) {
           </div>
         </div>
 
-        {/* Действия бариста */}
+        {/* Кнопки действий */}
         <div className="w-full space-y-3 pt-2">
-          {/* Кнопка начисления штампа */}
           <form action={awardStamp} className="w-full">
             <button
               type="submit"
@@ -210,7 +255,6 @@ export default async function ActionPage({ params }: ActionPageProps) {
             </button>
           </form>
 
-          {/* Кнопка списания бесплатного кофе */}
           <form action={redeemReward} className="w-full">
             <button
               type="submit"
@@ -230,7 +274,6 @@ export default async function ActionPage({ params }: ActionPageProps) {
             </button>
           </form>
 
-          {/* Кнопка следующего гостя */}
           <Link
             href="/scan"
             className="w-full py-3 px-4 rounded-xl bg-stone-900/60 border border-stone-800/80 hover:bg-stone-800 text-stone-300 text-xs font-semibold flex items-center justify-center gap-2 transition-all"
@@ -242,7 +285,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
       </main>
 
       <footer className="max-w-md mx-auto w-full text-center text-[11px] text-stone-500 py-2">
-        LoyaltyHub POS • Терминал бариста
+        Оператор: {authUser.email} • LoyaltyHub POS
       </footer>
     </div>
   );
