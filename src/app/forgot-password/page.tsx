@@ -160,15 +160,15 @@ export default function ForgotPasswordPage() {
             <form onSubmit={handleRequestSubmit} className="space-y-4">
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-stone-300 block">
-                  Ваш Email
+                  Логин или Email
                 </label>
                 <div className="relative">
                   <input
-                    type="email"
+                    type="text"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="name@example.com"
+                    placeholder="Admin или name@example.com"
                     className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-stone-950/80 border border-stone-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-xs text-white placeholder-stone-500 outline-none transition-all"
                   />
                   <Mail className="w-4 h-4 text-stone-500 absolute left-3.5 top-3 pointer-events-none" />

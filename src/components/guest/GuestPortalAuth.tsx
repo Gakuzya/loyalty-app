@@ -257,14 +257,14 @@ export const GuestPortalAuth: React.FC = () => {
 
         <div className="space-y-1">
           <label className="text-[11px] font-semibold text-stone-300 block">
-            Электронная почта
+            Логин или Email
           </label>
           <div className="relative">
             <input
-              type="email"
+              type="text"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="guest@mail.ru"
+              placeholder="Admin или guest@mail.ru"
               required
               className="w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-stone-950/80 border border-stone-800 focus:border-amber-500 text-xs text-white placeholder-stone-500 outline-none transition-all"
             />

@@ -6,12 +6,18 @@ import { redirect } from 'next/navigation';
 import prisma from '@/lib/prisma';
 
 export async function login(formData: FormData) {
-  const email = (formData.get('email') as string)?.trim().toLowerCase();
+  const rawLogin = (formData.get('email') as string)?.trim();
   const password = (formData.get('password') as string)?.trim();
 
-  if (!email || !password) {
+  if (!rawLogin || !password) {
     return { error: 'Заполните email и пароль' };
   }
+
+  // Поддержка кастомного логина "Admin" / "admin"
+  const email =
+    rawLogin.toLowerCase() === 'admin'
+      ? 'admin@loyaltyhub.com'
+      : rawLogin.toLowerCase();
 
   const supabase = await createClient();
 
@@ -279,11 +285,15 @@ export async function quickGoogleLogin(email: string) {
   }
 }
 
-// Запрос на сброс пароля по Email
+// Запрос на сброс пароля по Email или логину Admin
 export async function requestPasswordReset(email: string) {
-  const cleanEmail = email?.trim().toLowerCase();
+  let cleanEmail = email?.trim().toLowerCase();
+  if (cleanEmail === 'admin') {
+    cleanEmail = 'admin@loyaltyhub.com';
+  }
+
   if (!cleanEmail || !cleanEmail.includes('@')) {
-    return { error: 'Укажите корректный адрес электронной почты' };
+    return { error: 'Укажите корректный адрес электронной почты или логин Admin' };
   }
 
   try {
@@ -302,7 +312,7 @@ export async function requestPasswordReset(email: string) {
 
     if (!dbUser && !authUser) {
       return {
-        error: `Аккаунт с почтой ${cleanEmail} не найден. Проверьте правильность адреса или зарегистрируйтесь.`,
+        error: `Аккаунт с почтой или логином ${cleanEmail} не найден. Проверьте правильность адреса или зарегистрируйтесь.`,
       };
     }
 
@@ -338,7 +348,10 @@ export async function requestPasswordReset(email: string) {
 
 // Сброс и сохранение нового пароля по Email
 export async function resetPassword(formData: FormData) {
-  const email = (formData.get('email') as string)?.trim().toLowerCase();
+  let email = (formData.get('email') as string)?.trim().toLowerCase();
+  if (email === 'admin') {
+    email = 'admin@loyaltyhub.com';
+  }
   const newPassword = (formData.get('newPassword') as string)?.trim();
   const confirmPassword = (formData.get('confirmPassword') as string)?.trim();
 
