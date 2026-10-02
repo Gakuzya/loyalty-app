@@ -1,12 +1,11 @@
 'use client';
 
 import React, { useState } from 'react';
-import { login, signUp, quickGoogleLogin } from './actions';
+import { login, quickGoogleLogin } from './actions';
 import {
   Coffee,
   Lock,
   Mail,
-  User,
   ArrowRight,
   AlertCircle,
   CheckCircle2,
@@ -19,7 +18,6 @@ import {
 import Link from 'next/link';
 
 export default function LoginPage() {
-  const [isSignUp, setIsSignUp] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -38,14 +36,10 @@ export default function LoginPage() {
     setLoading(true);
 
     const formData = new FormData(e.currentTarget);
-    const result = isSignUp ? await signUp(formData) : await login(formData);
+    const result = await login(formData);
 
     if (result && 'error' in result && result.error) {
       setError(result.error);
-      setLoading(false);
-    } else if (result && 'success' in result && result.success) {
-      setSuccess(result.success);
-      setIsSignUp(false);
       setLoading(false);
     }
   };
@@ -55,7 +49,7 @@ export default function LoginPage() {
     setGoogleModalError(null);
     setGoogleModalLoading(true);
 
-    const res = await quickGoogleLogin(googleEmail, 'OWNER');
+    const res = await quickGoogleLogin(googleEmail);
     if (res && 'error' in res && res.error) {
       setGoogleModalError(res.error);
       setGoogleModalLoading(false);
@@ -155,7 +149,7 @@ export default function LoginPage() {
           <span>На главную</span>
         </Link>
         <span className="text-[11px] font-semibold text-amber-500 uppercase tracking-widest bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/20">
-          Staff Portal
+          LoyaltyHub Portal
         </span>
       </header>
 
@@ -167,52 +161,16 @@ export default function LoginPage() {
           <div className="absolute -bottom-12 -right-12 w-32 h-32 bg-amber-600/10 rounded-full blur-2xl pointer-events-none" />
 
           {/* Заголовок */}
-          <div className="text-center space-y-2 mb-5 relative">
+          <div className="text-center space-y-2 mb-6 relative">
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-700 text-stone-950 font-bold shadow-lg shadow-amber-600/20 mb-1">
               <Coffee className="w-6 h-6 stroke-[2.3]" />
             </div>
             <h1 className="text-xl font-extrabold text-white tracking-tight">
-              {isSignUp ? 'Регистрация владельца' : 'Вход для персонала'}
+              Вход в LoyaltyHub
             </h1>
             <p className="text-xs text-stone-400">
-              {isSignUp
-                ? 'Создайте сеть и начните начислять штампы'
-                : 'Панель аналитики сети и терминал бариста'}
+              Личный кабинет владельца, бариста и гостей
             </p>
-          </div>
-
-          {/* Переключатель табов Вход / Регистрация */}
-          <div className="flex p-1 rounded-2xl bg-stone-950/80 border border-stone-800 mb-5 relative">
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(false);
-                setError(null);
-                setSuccess(null);
-              }}
-              className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
-                !isSignUp
-                  ? 'bg-amber-500 text-stone-950 shadow-md'
-                  : 'text-stone-400 hover:text-white'
-              }`}
-            >
-              Вход
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(true);
-                setError(null);
-                setSuccess(null);
-              }}
-              className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
-                isSignUp
-                  ? 'bg-amber-500 text-stone-950 shadow-md'
-                  : 'text-stone-400 hover:text-white'
-              }`}
-            >
-              Регистрация
-            </button>
           </div>
 
           {/* Ошибка авторизации */}
@@ -231,26 +189,8 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* Форма входа / регистрации */}
+          {/* Форма входа */}
           <form onSubmit={handleSubmit} className="space-y-3.5 relative">
-            {isSignUp && (
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-stone-300 block">
-                  Ваше имя или название заведения
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    name="name"
-                    required
-                    placeholder="Алексей (Surf Coffee)"
-                    className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-stone-950/80 border border-stone-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-xs text-white placeholder-stone-500 outline-none transition-all"
-                  />
-                  <User className="w-4 h-4 text-stone-500 absolute left-3.5 top-3 pointer-events-none" />
-                </div>
-              </div>
-            )}
-
             {/* Поле Email */}
             <div className="space-y-1">
               <label className="text-xs font-semibold text-stone-300 block">
@@ -261,24 +201,31 @@ export default function LoginPage() {
                   type="email"
                   name="email"
                   required
-                  placeholder="owner@coffee.ru"
+                  placeholder="name@example.com"
                   className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-stone-950/80 border border-stone-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-xs text-white placeholder-stone-500 outline-none transition-all"
                 />
                 <Mail className="w-4 h-4 text-stone-500 absolute left-3.5 top-3 pointer-events-none" />
               </div>
             </div>
 
-            {/* Поле Пароль */}
+            {/* Поле Пароль с кнопкой "Забыли пароль?" */}
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-stone-300 block">
-                Пароль
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-stone-300 block">
+                  Пароль
+                </label>
+                <Link
+                  href="/forgot-password"
+                  className="text-[11px] text-amber-400 hover:text-amber-300 hover:underline transition-colors"
+                >
+                  Забыли пароль?
+                </Link>
+              </div>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
                   name="password"
                   required
-                  minLength={6}
                   placeholder="••••••••"
                   className="w-full pl-10 pr-10 py-2.5 rounded-xl bg-stone-950/80 border border-stone-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-xs text-white placeholder-stone-500 outline-none transition-all font-mono"
                 />
@@ -297,19 +244,13 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {/* Кнопка отправки */}
+            {/* Кнопка входа */}
             <button
               type="submit"
               disabled={loading}
               className="w-full mt-2 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:pointer-events-none text-stone-950 font-bold text-xs transition-all shadow-lg shadow-amber-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
             >
-              <span>
-                {loading
-                  ? 'Обработка...'
-                  : isSignUp
-                  ? 'Зарегистрировать сеть'
-                  : 'Войти в систему'}
-              </span>
+              <span>{loading ? 'Вход в аккаунт...' : 'Войти в систему'}</span>
               {!loading && <ArrowRight className="w-3.5 h-3.5" />}
             </button>
           </form>
@@ -343,15 +284,15 @@ export default function LoginPage() {
             </button>
           </div>
 
-          {/* Ссылка на регистрацию */}
+          {/* Ссылка на регистрацию для гостей */}
           <div className="mt-4 text-center">
             <span className="text-xs text-stone-400">
-              Еще нет аккаунта?{' '}
+              Новый гость?{' '}
               <Link
                 href="/register"
                 className="text-amber-400 font-bold hover:underline"
               >
-                Создать аккаунт за 10 сек
+                Создать карту гостя
               </Link>
             </span>
           </div>
@@ -368,7 +309,7 @@ export default function LoginPage() {
 
       {/* Футер */}
       <footer className="max-w-md mx-auto w-full text-center text-[11px] text-stone-500 py-2">
-        LoyaltyHub POS Security • Защищенное соединение
+        LoyaltyHub Security • Защищенный вход
       </footer>
     </div>
   );

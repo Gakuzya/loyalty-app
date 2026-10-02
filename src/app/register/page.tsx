@@ -2,7 +2,6 @@
 
 import React, { useState } from 'react';
 import { signUp, quickGoogleLogin } from '@/app/login/actions';
-import { createClient } from '@/lib/supabase/client';
 import {
   Coffee,
   Lock,
@@ -14,16 +13,13 @@ import {
   ChevronLeft,
   Eye,
   EyeOff,
-  Store,
-  QrCode,
   ShieldCheck,
   X,
-  ExternalLink,
+  Gift,
 } from 'lucide-react';
 import Link from 'next/link';
 
 export default function RegisterPage() {
-  const [role, setRole] = useState<'OWNER' | 'CUSTOMER'>('OWNER');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [password, setPassword] = useState('');
@@ -36,8 +32,6 @@ export default function RegisterPage() {
   const [googleEmail, setGoogleEmail] = useState('');
   const [googleModalLoading, setGoogleModalLoading] = useState(false);
   const [googleModalError, setGoogleModalError] = useState<string | null>(null);
-
-  const supabase = createClient();
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -55,7 +49,6 @@ export default function RegisterPage() {
 
     setLoading(true);
     const formData = new FormData(e.currentTarget);
-    formData.set('role', role);
 
     const result = await signUp(formData);
 
@@ -65,42 +58,12 @@ export default function RegisterPage() {
     }
   };
 
-  const handleGoogleLogin = async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      const targetNext = role === 'OWNER' ? '/dashboard' : '/guest';
-      const { error: oauthError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback?next=${targetNext}`,
-        },
-      });
-
-      if (oauthError) {
-        if (
-          oauthError.message.toLowerCase().includes('not enabled') ||
-          oauthError.message.toLowerCase().includes('unsupported')
-        ) {
-          // Открываем модалку быстрого входа
-          setShowGoogleModal(true);
-        } else {
-          setError(`Ошибка Google: ${oauthError.message}`);
-        }
-      }
-    } catch (err: unknown) {
-      setShowGoogleModal(true);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleQuickGoogleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setGoogleModalError(null);
     setGoogleModalLoading(true);
 
-    const res = await quickGoogleLogin(googleEmail, role);
+    const res = await quickGoogleLogin(googleEmail);
     if (res && 'error' in res && res.error) {
       setGoogleModalError(res.error);
       setGoogleModalLoading(false);
@@ -143,10 +106,10 @@ export default function RegisterPage() {
               </div>
               <div>
                 <h3 className="text-sm font-bold text-white leading-tight">
-                  Вход под вашим Google Email
+                  Вход под Google Email
                 </h3>
                 <p className="text-[11px] text-stone-400 mt-0.5">
-                  Быстрый вход в 1 клик без паролей
+                  Быстрый вход для гостей в 1 клик
                 </p>
               </div>
             </div>
@@ -186,15 +149,6 @@ export default function RegisterPage() {
                   : 'Войти под этим Google Email в 1 клик'}
               </button>
             </form>
-
-            <div className="pt-3 border-t border-stone-800 text-[10px] text-stone-500 space-y-1">
-              <span className="font-semibold text-stone-400 block">
-                Примечание разработчику:
-              </span>
-              <p>
-                Официальный OAuth Google включается в панели Supabase: Auth → Providers → Google (Client ID + Secret).
-              </p>
-            </div>
           </div>
         </div>
       )}
@@ -209,7 +163,7 @@ export default function RegisterPage() {
           <span>На главную</span>
         </Link>
         <span className="text-[11px] font-semibold text-amber-500 uppercase tracking-widest bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/20">
-          Регистрация в LoyaltyHub
+          Карта гостя
         </span>
       </header>
 
@@ -223,76 +177,14 @@ export default function RegisterPage() {
           {/* Заголовок */}
           <div className="text-center space-y-1.5 mb-5 relative">
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-700 text-stone-950 font-bold shadow-lg shadow-amber-600/20 mb-1">
-              <Coffee className="w-6 h-6 stroke-[2.3]" />
+              <Gift className="w-6 h-6 stroke-[2.3]" />
             </div>
             <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-              Создать аккаунт
+              Регистрация карты гостя
             </h1>
             <p className="text-xs text-stone-400">
-              Быстрая регистрация без подтверждения по ссылкам
+              Копите штампы и получайте каждый 6-й напиток бесплатно
             </p>
-          </div>
-
-          {/* ВЫБОР РОЛИ: ВЛАДЕЛЕЦ ИЛИ ГОСТЬ */}
-          <div className="space-y-1.5 mb-5">
-            <label className="text-[11px] font-bold text-stone-400 uppercase tracking-wider block">
-              Тип аккаунта
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setRole('OWNER')}
-                className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                  role === 'OWNER'
-                    ? 'bg-amber-500/15 border-amber-500 text-white shadow-md shadow-amber-950/20'
-                    : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <Store
-                    className={`w-4 h-4 ${
-                      role === 'OWNER' ? 'text-amber-400' : 'text-stone-500'
-                    }`}
-                  />
-                  {role === 'OWNER' && (
-                    <span className="w-2 h-2 rounded-full bg-amber-400" />
-                  )}
-                </div>
-                <div>
-                  <span className="text-xs font-bold block">Владелец сети</span>
-                  <span className="text-[10px] text-stone-400 block mt-0.5 leading-tight">
-                    Кофейня, аналитика, персонал
-                  </span>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setRole('CUSTOMER')}
-                className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                  role === 'CUSTOMER'
-                    ? 'bg-amber-500/15 border-amber-500 text-white shadow-md shadow-amber-950/20'
-                    : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <QrCode
-                    className={`w-4 h-4 ${
-                      role === 'CUSTOMER' ? 'text-amber-400' : 'text-stone-500'
-                    }`}
-                  />
-                  {role === 'CUSTOMER' && (
-                    <span className="w-2 h-2 rounded-full bg-amber-400" />
-                  )}
-                </div>
-                <div>
-                  <span className="text-xs font-bold block">Гость кофейни</span>
-                  <span className="text-[10px] text-stone-400 block mt-0.5 leading-tight">
-                    QR-код, копить 6 штампов
-                  </span>
-                </div>
-              </button>
-            </div>
           </div>
 
           {/* Ошибка */}
@@ -307,20 +199,14 @@ export default function RegisterPage() {
           <form onSubmit={handleSubmit} className="space-y-3.5 relative">
             <div className="space-y-1">
               <label className="text-xs font-semibold text-stone-300 block">
-                {role === 'OWNER'
-                  ? 'Ваше имя или название заведения'
-                  : 'Ваше имя'}
+                Ваше имя
               </label>
               <div className="relative">
                 <input
                   type="text"
                   name="name"
                   required
-                  placeholder={
-                    role === 'OWNER'
-                      ? 'Алексей (Surf Coffee)'
-                      : 'Константин'
-                  }
+                  placeholder="Анна"
                   className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-stone-950/80 border border-stone-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-xs text-white placeholder-stone-500 outline-none transition-all"
                 />
                 <User className="w-4 h-4 text-stone-500 absolute left-3.5 top-3 pointer-events-none" />
@@ -336,7 +222,7 @@ export default function RegisterPage() {
                   type="email"
                   name="email"
                   required
-                  placeholder="name@example.com"
+                  placeholder="anna@example.com"
                   className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-stone-950/80 border border-stone-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-xs text-white placeholder-stone-500 outline-none transition-all"
                 />
                 <Mail className="w-4 h-4 text-stone-500 absolute left-3.5 top-3 pointer-events-none" />
@@ -410,10 +296,8 @@ export default function RegisterPage() {
             >
               <span>
                 {loading
-                  ? 'Создание аккаунта...'
-                  : role === 'OWNER'
-                  ? 'Зарегистрировать сеть и войти'
-                  : 'Получить карту гостя'}
+                  ? 'Создание карты гостя...'
+                  : 'Зарегистрироваться и получить карту'}
               </span>
               {!loading && <ArrowRight className="w-3.5 h-3.5" />}
             </button>
@@ -423,7 +307,7 @@ export default function RegisterPage() {
           <div className="mt-4 pt-4 border-t border-stone-800/80">
             <button
               type="button"
-              onClick={handleGoogleLogin}
+              onClick={() => setShowGoogleModal(true)}
               disabled={loading}
               className="w-full py-2.5 px-3.5 rounded-xl bg-stone-950/80 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-white text-xs font-semibold transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-50"
             >
@@ -445,27 +329,36 @@ export default function RegisterPage() {
                   d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.3-6.4-5.2L1.9 16C3.7 19.7 7.5 23 12 23z"
                 />
               </svg>
-              <span>Зарегистрироваться через Google</span>
+              <span>Войти через Google в 1 клик</span>
             </button>
           </div>
 
           {/* Ссылка на вход */}
-          <div className="mt-5 text-center">
-            <span className="text-xs text-stone-400">
-              Уже есть учетная запись?{' '}
+          <div className="mt-5 text-center space-y-2">
+            <p className="text-xs text-stone-400">
+              Уже есть карта гостя?{' '}
               <Link
                 href="/login"
                 className="text-amber-400 font-bold hover:underline"
               >
                 Войти
               </Link>
-            </span>
+            </p>
+            <p className="text-[11px] text-stone-500">
+              Владелец сети или сотрудник?{' '}
+              <Link
+                href="/login"
+                className="text-stone-400 font-medium hover:text-stone-300 underline"
+              >
+                Вход для персонала
+              </Link>
+            </p>
           </div>
         </div>
       </main>
 
       <footer className="max-w-md mx-auto w-full text-center text-[11px] text-stone-500 py-2">
-        LoyaltyHub Security • Защищенная регистрация
+        LoyaltyHub Security • Регистрация карт гостей
       </footer>
     </div>
   );

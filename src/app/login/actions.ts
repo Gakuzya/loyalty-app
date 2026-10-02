@@ -57,7 +57,7 @@ export async function login(formData: FormData) {
   }
 
   // Синхронизируем пользователя в Prisma
-  let targetPath = '/dashboard';
+  let targetPath = '/guest';
 
   if (data?.user?.email) {
     let dbUser = await prisma.user.findUnique({
@@ -75,34 +75,32 @@ export async function login(formData: FormData) {
             data.user.user_metadata?.name ||
             data.user.user_metadata?.full_name ||
             data.user.email.split('@')[0],
-          role:
-            (data.user.user_metadata?.role as 'OWNER' | 'BARISTA' | 'CUSTOMER') ||
-            'OWNER',
+          role: 'CUSTOMER', // Любой новый пользователь по умолчанию только CUSTOMER
         },
       });
     }
 
-    if (dbUser.role === 'BARISTA') {
-      targetPath = '/scan';
-    } else if (dbUser.role === 'CUSTOMER') {
-      targetPath = '/guest';
-    } else {
+    if (dbUser.role === 'OWNER') {
       targetPath = '/dashboard';
+    } else if (dbUser.role === 'BARISTA') {
+      targetPath = '/scan';
+    } else {
+      targetPath = '/guest';
     }
   }
 
   redirect(targetPath);
 }
 
+// Регистрация ТОЛЬКО для гостей (CUSTOMER). Никакой публичной регистрации под владельца!
 export async function signUp(formData: FormData) {
   const email = (formData.get('email') as string)?.trim().toLowerCase();
   const password = (formData.get('password') as string)?.trim();
   const confirmPassword = (formData.get('confirmPassword') as string)?.trim();
   const name = (formData.get('name') as string)?.trim();
-  const role = ((formData.get('role') as string) || 'OWNER') as
-    | 'OWNER'
-    | 'CUSTOMER'
-    | 'BARISTA';
+
+  // Жестко фиксируем роль CUSTOMER: пользователи не могут сами назначить себе роль OWNER
+  const role = 'CUSTOMER';
 
   if (!email || !password) {
     return { error: 'Пожалуйста, укажите email и пароль' };
@@ -127,7 +125,7 @@ export async function signUp(formData: FormData) {
         email_confirm: true,
         user_metadata: {
           name: name || email.split('@')[0],
-          role,
+          role: 'CUSTOMER',
         },
       });
 
@@ -144,44 +142,22 @@ export async function signUp(formData: FormData) {
       return { error: `Ошибка регистрации: ${createError.message}` };
     }
 
-    // Создаем запись пользователя в Prisma
+    // Создаем запись пользователя в Prisma со строгой ролью CUSTOMER
     if (created.user) {
       await prisma.user.upsert({
         where: { id: created.user.id },
         update: {
           email,
           name: name || email.split('@')[0],
-          role,
+          // Не перезаписываем роль, если пользователь уже был в БД с другой ролью
         },
         create: {
           id: created.user.id,
           email,
           name: name || email.split('@')[0],
-          role,
+          role: 'CUSTOMER',
         },
       });
-
-      // Если регистрируется владелец, сразу создаем для него сеть и первый филиал
-      if (role === 'OWNER') {
-        const slug = `branch-${created.user.id.slice(0, 6)}`;
-        await prisma.network.upsert({
-          where: { ownerId: created.user.id },
-          update: {},
-          create: {
-            ownerId: created.user.id,
-            name: name ? `Сеть ${name}` : 'Моя Сеть Кофеен',
-            targetStamps: 6,
-            rewardTitle: 'Бесплатный напиток на выбор',
-            branches: {
-              create: {
-                name: 'Главный филиал',
-                slug,
-                address: 'ул. Главная, д. 1',
-              },
-            },
-          },
-        });
-      }
     }
 
     // Выполняем мгновенную авторизацию в Next.js сессию
@@ -201,24 +177,19 @@ export async function signUp(formData: FormData) {
     return { error: `Ошибка сервера: ${msg}` };
   }
 
-  if (role === 'BARISTA') {
-    redirect('/scan');
-  } else if (role === 'CUSTOMER') {
-    redirect('/guest');
-  } else {
-    redirect('/dashboard');
-  }
+  redirect('/guest');
 }
 
-// Быстрый вход с Google Email без паролей и ожидания активации провайдера
-export async function quickGoogleLogin(
-  email: string,
-  role: 'OWNER' | 'CUSTOMER' = 'OWNER'
-) {
+// Быстрый вход с Google Email:
+// Если пользователь уже существует в базе (например, Владелец или Бариста) — сохраняет его роль и перенаправляет в нужный кабинет.
+// Если это новый пользователь — создается СТРОГО с ролью CUSTOMER (гость).
+export async function quickGoogleLogin(email: string) {
   const cleanEmail = email?.trim().toLowerCase();
   if (!cleanEmail || !cleanEmail.includes('@')) {
     return { error: 'Пожалуйста, введите корректный адрес электронной почты' };
   }
+
+  let userRole: 'OWNER' | 'BARISTA' | 'CUSTOMER' = 'CUSTOMER';
 
   try {
     const admin = createAdminClient();
@@ -227,6 +198,15 @@ export async function quickGoogleLogin(
     } = await admin.auth.admin.listUsers();
     let targetUser = users.find((u) => u.email?.toLowerCase() === cleanEmail);
 
+    // Проверяем существующего пользователя в Prisma
+    let dbUser = await prisma.user.findUnique({
+      where: { email: cleanEmail },
+    });
+
+    if (dbUser) {
+      userRole = dbUser.role;
+    }
+
     if (!targetUser) {
       const { data: created, error: createErr } =
         await admin.auth.admin.createUser({
@@ -234,7 +214,7 @@ export async function quickGoogleLogin(
           email_confirm: true,
           user_metadata: {
             name: cleanEmail.split('@')[0],
-            role,
+            role: userRole,
           },
         });
       if (createErr) {
@@ -253,43 +233,17 @@ export async function quickGoogleLogin(
       return { error: 'Не удалось инициализировать профиль' };
     }
 
-    // Синхронизируем в Prisma
-    let dbUser = await prisma.user.findUnique({
-      where: { email: cleanEmail },
-    });
-
     if (!dbUser) {
+      // Новый пользователь создается строго как CUSTOMER!
       dbUser = await prisma.user.create({
         data: {
           id: targetUser.id,
           email: cleanEmail,
           name: cleanEmail.split('@')[0],
-          role,
+          role: 'CUSTOMER',
         },
       });
-    }
-
-    if (role === 'OWNER') {
-      const existingNetwork = await prisma.network.findUnique({
-        where: { ownerId: dbUser.id },
-      });
-      if (!existingNetwork) {
-        await prisma.network.create({
-          data: {
-            ownerId: dbUser.id,
-            name: `Сеть ${dbUser.name}`,
-            targetStamps: 6,
-            rewardTitle: 'Бесплатный напиток на выбор',
-            branches: {
-              create: {
-                name: 'Главный филиал',
-                slug: `branch-${dbUser.id.slice(0, 6)}`,
-                address: 'ул. Главная, д. 1',
-              },
-            },
-          },
-        });
-      }
+      userRole = 'CUSTOMER';
     }
 
     const { data: linkData, error: linkErr } =
@@ -316,10 +270,143 @@ export async function quickGoogleLogin(
     return { error: `Ошибка входа: ${msg}` };
   }
 
-  if (role === 'CUSTOMER') {
-    redirect('/guest');
-  } else {
+  if (userRole === 'OWNER') {
     redirect('/dashboard');
+  } else if (userRole === 'BARISTA') {
+    redirect('/scan');
+  } else {
+    redirect('/guest');
+  }
+}
+
+// Запрос на сброс пароля по Email
+export async function requestPasswordReset(email: string) {
+  const cleanEmail = email?.trim().toLowerCase();
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    return { error: 'Укажите корректный адрес электронной почты' };
+  }
+
+  try {
+    // 1. Проверяем, существует ли аккаунт
+    const dbUser = await prisma.user.findUnique({
+      where: { email: cleanEmail },
+    });
+
+    const admin = createAdminClient();
+    const {
+      data: { users },
+    } = await admin.auth.admin.listUsers();
+    const authUser = users.find(
+      (u) => u.email?.toLowerCase() === cleanEmail
+    );
+
+    if (!dbUser && !authUser) {
+      return {
+        error: `Аккаунт с почтой ${cleanEmail} не найден. Проверьте правильность адреса или зарегистрируйтесь.`,
+      };
+    }
+
+    // 2. Генерируем ссылку восстановления через Supabase Admin API
+    const { data: linkData, error: linkErr } =
+      await admin.auth.admin.generateLink({
+        type: 'recovery',
+        email: cleanEmail,
+      });
+
+    if (linkErr) {
+      console.warn('generateLink warning:', linkErr.message);
+    }
+
+    // 3. Пытаемся отправить официальное письмо через Supabase
+    try {
+      const supabase = await createClient();
+      await supabase.auth.resetPasswordForEmail(cleanEmail);
+    } catch (emailErr) {
+      console.warn('Supabase resetPasswordForEmail warning:', emailErr);
+    }
+
+    return {
+      success: true,
+      email: cleanEmail,
+      directLink: linkData?.properties?.action_link || null,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { error: `Ошибка: ${msg}` };
+  }
+}
+
+// Сброс и сохранение нового пароля по Email
+export async function resetPassword(formData: FormData) {
+  const email = (formData.get('email') as string)?.trim().toLowerCase();
+  const newPassword = (formData.get('newPassword') as string)?.trim();
+  const confirmPassword = (formData.get('confirmPassword') as string)?.trim();
+
+  if (!email || !newPassword) {
+    return { error: 'Заполните email и новый пароль' };
+  }
+
+  if (newPassword.length < 6) {
+    return { error: 'Новый пароль должен содержать минимум 6 символов' };
+  }
+
+  if (confirmPassword && newPassword !== confirmPassword) {
+    return { error: 'Пароли не совпадают' };
+  }
+
+  let userRole: 'OWNER' | 'BARISTA' | 'CUSTOMER' = 'CUSTOMER';
+
+  try {
+    const admin = createAdminClient();
+    const {
+      data: { users },
+    } = await admin.auth.admin.listUsers();
+    const targetUser = users.find(
+      (u) => u.email?.toLowerCase() === email.toLowerCase()
+    );
+
+    if (!targetUser) {
+      return { error: 'Пользователь с таким email не найден' };
+    }
+
+    // Обновляем пароль пользователя через Admin API
+    const { error: updateErr } = await admin.auth.admin.updateUserById(
+      targetUser.id,
+      {
+        password: newPassword,
+        email_confirm: true,
+      }
+    );
+
+    if (updateErr) {
+      return { error: `Не удалось обновить пароль: ${updateErr.message}` };
+    }
+
+    // Проверяем роль в Prisma
+    const dbUser = await prisma.user.findUnique({
+      where: { email },
+    });
+    if (dbUser) {
+      userRole = dbUser.role;
+    }
+
+    // Авторизуем пользователя с новым паролем
+    const supabase = await createClient();
+    await supabase.auth.signInWithPassword({
+      email,
+      password: newPassword,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { error: `Ошибка при сохранении пароля: ${msg}` };
+  }
+
+  if (userRole === 'OWNER') {
+    redirect('/dashboard');
+  } else if (userRole === 'BARISTA') {
+    redirect('/scan');
+  } else {
+    redirect('/guest');
   }
 }
 

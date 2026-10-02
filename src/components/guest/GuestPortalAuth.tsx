@@ -46,7 +46,6 @@ export const GuestPortalAuth: React.FC = () => {
       formData.append('email', email);
       formData.append('password', password);
       formData.append('name', fullName);
-      formData.append('role', 'CUSTOMER');
 
       if (isSignUp) {
         const res = await signUp(formData);
@@ -79,7 +78,7 @@ export const GuestPortalAuth: React.FC = () => {
     setGoogleModalError(null);
     setGoogleModalLoading(true);
 
-    const res = await quickGoogleLogin(googleEmail, 'CUSTOMER');
+    const res = await quickGoogleLogin(googleEmail);
     if (res && 'error' in res && res.error) {
       setGoogleModalError(res.error);
       setGoogleModalLoading(false);
@@ -274,9 +273,19 @@ export const GuestPortalAuth: React.FC = () => {
         </div>
 
         <div className="space-y-1">
-          <label className="text-[11px] font-semibold text-stone-300 block">
-            Пароль
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="text-[11px] font-semibold text-stone-300 block">
+              Пароль
+            </label>
+            {!isSignUp && (
+              <Link
+                href="/forgot-password"
+                className="text-[10px] text-amber-400 hover:underline"
+              >
+                Забыли пароль?
+              </Link>
+            )}
+          </div>
           <div className="relative">
             <input
               type={showPassword ? 'text' : 'password'}
@@ -345,12 +354,12 @@ export const GuestPortalAuth: React.FC = () => {
 
       <div className="mt-4 text-center">
         <span className="text-[11px] text-stone-400">
-          Нужен аккаунт владельца заведения?{' '}
+          Владелец сети или сотрудник?{' '}
           <Link
-            href="/register"
+            href="/login"
             className="text-amber-400 font-semibold hover:underline"
           >
-            Регистрация сети
+            Вход в Staff Portal
           </Link>
         </span>
       </div>
