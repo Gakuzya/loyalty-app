@@ -352,17 +352,6 @@ export const GuestPortalAuth: React.FC = () => {
         </button>
       </div>
 
-      <div className="mt-4 text-center">
-        <span className="text-[11px] text-stone-400">
-          Владелец сети или сотрудник?{' '}
-          <Link
-            href="/login"
-            className="text-amber-400 font-semibold hover:underline"
-          >
-            Вход в Staff Portal
-          </Link>
-        </span>
-      </div>
 
       <div className="mt-3 text-center">
         <span className="text-[11px] text-stone-500 flex items-center justify-center gap-1">

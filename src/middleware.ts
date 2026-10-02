@@ -49,15 +49,22 @@ export async function middleware(request: NextRequest) {
     path.startsWith('/scan') ||
     path.startsWith('/action');
 
-  // Если неавторизованный пользователь пытается зайти в закрытый персонал-раздел
+  // Если неавторизованный пользователь пытается зайти в закрытый раздел персонала
   if (isStaffProtectedPath && !user) {
     const redirectUrl = new URL('/login', request.url);
     return NextResponse.redirect(redirectUrl);
   }
 
-  // Если уже авторизованный пользователь заходит на /login — отправляем в дашборд
-  if (path === '/login' && user) {
-    const redirectUrl = new URL('/dashboard', request.url);
+  // Если уже авторизованный пользователь заходит на /login или /register — направляем строго по роли
+  if ((path === '/login' || path === '/register') && user) {
+    const userRole = user.user_metadata?.role;
+    let target = '/guest';
+    if (userRole === 'OWNER') {
+      target = '/dashboard';
+    } else if (userRole === 'BARISTA') {
+      target = '/scan';
+    }
+    const redirectUrl = new URL(target, request.url);
     return NextResponse.redirect(redirectUrl);
   }
 

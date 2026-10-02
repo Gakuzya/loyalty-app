@@ -1,15 +1,11 @@
 import React from 'react';
 import Link from 'next/link';
+import prisma from '@/lib/prisma';
 import { createClient } from '@/lib/supabase/server';
+import { redirect } from 'next/navigation';
 import { logout } from '@/app/login/actions';
 import { SidebarNav } from '@/components/dashboard/SidebarNav';
-import {
-  Coffee,
-  QrCode,
-  ChevronRight,
-  LogOut,
-  User,
-} from 'lucide-react';
+import { Coffee, LogOut, Shield } from 'lucide-react';
 
 export default async function DashboardLayout({
   children,
@@ -20,6 +16,23 @@ export default async function DashboardLayout({
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect('/login');
+  }
+
+  // Строгая проверка роли: только Владелец (OWNER) имеет доступ в панель управления
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.id },
+  });
+
+  if (!dbUser || dbUser.role !== 'OWNER') {
+    if (dbUser?.role === 'BARISTA') {
+      redirect('/scan');
+    }
+    // Если гость (CUSTOMER) или неизвестная роль — жестко выкидываем на страницу гостя
+    redirect('/guest');
+  }
 
   return (
     <div className="min-h-screen bg-[#0f0d0c] text-stone-100 flex flex-col md:flex-row select-none">
@@ -41,45 +54,25 @@ export default async function DashboardLayout({
             </div>
           </Link>
 
-          {/* Навигационное меню со ссылками на /dashboard, /guests, /settings */}
+          {/* Навигационное меню владельца: /dashboard, /branches, /staff, /kpi, /guests, /settings */}
           <SidebarNav />
-
-          {/* Блок быстрого доступа */}
-          <div className="pt-4 border-t border-stone-800/80 space-y-2">
-            <span className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest px-3 block">
-              Быстрый доступ
-            </span>
-
-            <Link
-              href="/scan"
-              className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-stone-850 hover:bg-stone-800 text-stone-300 hover:text-white text-xs font-medium transition-all"
-            >
-              <span className="flex items-center gap-2">
-                <QrCode className="w-3.5 h-3.5 text-amber-400" />
-                <span>Терминал бариста</span>
-              </span>
-              <ChevronRight className="w-3.5 h-3.5 text-stone-500" />
-            </Link>
-          </div>
         </div>
 
         {/* Профиль и кнопка выхода внизу сайдбара */}
         <div className="pt-4 border-t border-stone-800/80 space-y-3">
-          {user && (
-            <div className="flex items-center gap-2.5 px-2">
-              <div className="w-8 h-8 rounded-full bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 text-xs font-bold shrink-0">
-                <User className="w-4 h-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <span className="text-xs font-semibold text-white block truncate">
-                  {user.email}
-                </span>
-                <span className="text-[10px] text-amber-500 block uppercase font-medium">
-                  Владелец
-                </span>
-              </div>
+          <div className="flex items-center gap-2.5 px-2">
+            <div className="w-8 h-8 rounded-full bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 text-xs font-bold shrink-0">
+              <Shield className="w-4 h-4" />
             </div>
-          )}
+            <div className="min-w-0 flex-1">
+              <span className="text-xs font-semibold text-white block truncate">
+                {dbUser.name || user.email}
+              </span>
+              <span className="text-[10px] text-amber-500 block uppercase font-medium">
+                Владелец сети
+              </span>
+            </div>
+          </div>
 
           <form action={logout}>
             <button

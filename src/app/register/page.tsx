@@ -334,7 +334,7 @@ export default function RegisterPage() {
           </div>
 
           {/* Ссылка на вход */}
-          <div className="mt-5 text-center space-y-2">
+          <div className="mt-5 text-center">
             <p className="text-xs text-stone-400">
               Уже есть карта гостя?{' '}
               <Link
@@ -342,15 +342,6 @@ export default function RegisterPage() {
                 className="text-amber-400 font-bold hover:underline"
               >
                 Войти
-              </Link>
-            </p>
-            <p className="text-[11px] text-stone-500">
-              Владелец сети или сотрудник?{' '}
-              <Link
-                href="/login"
-                className="text-stone-400 font-medium hover:text-stone-300 underline"
-              >
-                Вход для персонала
               </Link>
             </p>
           </div>

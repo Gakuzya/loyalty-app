@@ -40,25 +40,8 @@ export default async function ActionPage({ params }: ActionPageProps) {
     },
   });
 
-  if (!baristaUser && authUser.email) {
-    baristaUser = await prisma.user.create({
-      data: {
-        id: authUser.id,
-        email: authUser.email,
-        name:
-          authUser.user_metadata?.full_name ||
-          authUser.email.split('@')[0],
-        role: 'BARISTA',
-      },
-      include: {
-        branch: {
-          include: { network: true },
-        },
-        network: {
-          include: { branches: true },
-        },
-      },
-    });
+  if (baristaUser?.role === 'CUSTOMER') {
+    redirect('/guest');
   }
 
   // Филиал, в котором работает бариста (или первый филиал сети владельца)
