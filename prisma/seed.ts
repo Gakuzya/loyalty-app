@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('🌱 Заполнение базы данных тестовыми данными (SaaS multi-branch)...');
+  console.log('🌱 Заполнение базы данных тестовыми данными (SaaS multi-branch + RFM)...');
 
   // 1. Создаем тестового владельца сети
   const owner = await prisma.user.upsert({
@@ -69,8 +69,12 @@ async function main() {
     },
   });
 
-  // 6. Создаем тестового постоянного гостя
-  const customer = await prisma.user.upsert({
+  const daysAgo = (days: number) =>
+    new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+
+  // 6. Тестовые гости для всех RFM-сегментов:
+  // Гость 1: В зоне риска (AT_RISK) — ходил каждые 3 дня, но не был уже 11 дней (активируется оффер «Штамп x2 до воскресенья»)
+  const customerAtRisk = await prisma.user.upsert({
     where: { email: 'customer@coffee.ru' },
     update: {},
     create: {
@@ -82,19 +86,93 @@ async function main() {
     },
   });
 
-  // 7. Создаем тестовые транзакции
-  for (let i = 0; i < 12; i++) {
+  const atRiskVisitDays = [35, 32, 29, 26, 23, 20, 17, 14, 11];
+  for (const d of atRiskVisitDays) {
     await prisma.transaction.create({
       data: {
         type: 'EARN_STAMP',
-        customerId: customer.id,
+        customerId: customerAtRisk.id,
         baristaId: barista.id,
         branchId: branch.id,
+        createdAt: daysAgo(d),
       },
     });
   }
 
-  console.log(`✅ Тестовые данные успешно созданы!`);
+  // Гость 2: Чемпион (CHAMPIONS, GOLD) — ходит каждые 1.5-2 дня, был вчера
+  const customerChampion = await prisma.user.upsert({
+    where: { email: 'anna.gold@coffee.ru' },
+    update: {},
+    create: {
+      id: '00000000-0000-0000-0000-000000000002',
+      email: 'anna.gold@coffee.ru',
+      name: 'Анна Морозова',
+      role: 'CUSTOMER',
+      tier: 'GOLD',
+    },
+  });
+
+  for (let i = 0; i < 26; i++) {
+    await prisma.transaction.create({
+      data: {
+        type: 'EARN_STAMP',
+        customerId: customerChampion.id,
+        baristaId: barista.id,
+        branchId: branch.id,
+        createdAt: daysAgo(Math.max(0.5, 38 - i * 1.5)),
+      },
+    });
+  }
+
+  // Гость 3: Спящий (SLEEPING) — последний визит 34 дня назад
+  const customerSleeping = await prisma.user.upsert({
+    where: { email: 'dmitry.sleep@coffee.ru' },
+    update: {},
+    create: {
+      id: '00000000-0000-0000-0000-000000000003',
+      email: 'dmitry.sleep@coffee.ru',
+      name: 'Дмитрий Волков',
+      role: 'CUSTOMER',
+      tier: 'BRONZE',
+    },
+  });
+
+  for (const d of [50, 44, 39, 34]) {
+    await prisma.transaction.create({
+      data: {
+        type: 'EARN_STAMP',
+        customerId: customerSleeping.id,
+        baristaId: barista.id,
+        branchId: branch.id,
+        createdAt: daysAgo(d),
+      },
+    });
+  }
+
+  // Гость 4: Перспективный новичок (PROMISING) — 1 визит 2 дня назад
+  const customerNew = await prisma.user.upsert({
+    where: { email: 'elena.new@coffee.ru' },
+    update: {},
+    create: {
+      id: '00000000-0000-0000-0000-000000000004',
+      email: 'elena.new@coffee.ru',
+      name: 'Елена Соколова',
+      role: 'CUSTOMER',
+      tier: 'BRONZE',
+    },
+  });
+
+  await prisma.transaction.create({
+    data: {
+      type: 'EARN_STAMP',
+      customerId: customerNew.id,
+      baristaId: barista.id,
+      branchId: branch.id,
+      createdAt: daysAgo(2),
+    },
+  });
+
+  console.log(`✅ Тестовые данные RFM-сегментации успешно созданы!`);
   console.log(`☕ Сеть: ${network.name}`);
   console.log(`📍 Филиал: ${branch.name} (/card/${branch.slug})`);
 }

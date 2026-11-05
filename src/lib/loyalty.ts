@@ -31,7 +31,7 @@ export const TIER_CONFIG = {
     nextTierStamps: 10,
     color: 'from-amber-700 to-amber-900',
     badgeColor: 'bg-amber-800/20 text-amber-500 border-amber-800/40',
-    perk: 'Стандартное начисление штампов',
+    perk: 'Базовое начисление (1 штамп за визит) + персональные акции x2',
   },
   SILVER: {
     title: 'Silver Connoisseur',
@@ -40,7 +40,7 @@ export const TIER_CONFIG = {
     nextTierStamps: 25,
     color: 'from-slate-400 via-stone-300 to-zinc-500',
     badgeColor: 'bg-slate-500/20 text-slate-300 border-slate-400/40',
-    perk: '+10% к шансу на секретные напитки и бонусы',
+    perk: 'Каждый 4-й визит — двойной штамп (x2) и персональные офферы',
   },
   GOLD: {
     title: 'Gold VIP Coffee Lover',
@@ -49,6 +49,6 @@ export const TIER_CONFIG = {
     nextTierStamps: null,
     color: 'from-amber-400 via-yellow-300 to-amber-600',
     badgeColor: 'bg-yellow-500/20 text-yellow-300 border-yellow-400/40',
-    perk: 'Двойные штампы по выходным и спец-приглашения',
+    perk: 'Двойные штампы (x2) по выходным (пт–вс) и каждый 3-й визит в будни',
   },
 };

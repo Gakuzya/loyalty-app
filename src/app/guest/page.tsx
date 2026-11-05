@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma';
 import { GuestPortalAuth } from '@/components/guest/GuestPortalAuth';
 import { GuestPortalView } from '@/components/guest/GuestPortalView';
 import { calculateCustomerStamps, calculateTier } from '@/lib/loyalty';
+import { analyzeGuest } from '@/lib/analytics';
 import { logout } from '@/app/login/actions';
 import { Coffee, LogOut } from 'lucide-react';
 import { redirect } from 'next/navigation';
@@ -85,8 +86,16 @@ export default async function GuestPage() {
     },
   });
 
+  const defaultTargetStamps =
+    transactions[0]?.branch?.network?.targetStamps || 6;
+  const guestAnalytics = analyzeGuest(
+    user.id,
+    transactions,
+    defaultTargetStamps
+  );
+
   // Расчет общего количества накопленных штампов и текущего уровня (Tier)
-  const totalStamps = transactions.filter((t) => t.type === 'EARN_STAMP').length;
+  const totalStamps = guestAnalytics.totalEarned;
   const currentTier = calculateTier(totalStamps);
 
   // Синхронизируем уровень в БД, если изменился
@@ -179,6 +188,7 @@ export default async function GuestPage() {
           }}
           branches={branches}
           initialHistory={initialHistory}
+          initialAnalytics={guestAnalytics}
         />
       </main>
 

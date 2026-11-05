@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import { createClient } from '@/lib/supabase/server';
 import { GuestCardClient } from '@/components/guest/GuestCardClient';
 import { calculateCustomerStamps } from '@/lib/loyalty';
+import { analyzeGuest, type GuestAnalyticsProfile } from '@/lib/analytics';
 import Link from 'next/link';
 import { ChevronLeft, Store, LogIn } from 'lucide-react';
 
@@ -54,24 +55,39 @@ export default async function GuestCardPage({ params }: CardPageProps) {
   let currentStamps = 0;
   let rewardsAvailable = 0;
   let qrToken = 'guest:anonymous';
+  let guestAnalytics: GuestAnalyticsProfile | undefined;
 
   if (user) {
     qrToken = `guest:${user.id}`;
 
-    // Загружаем транзакции гостя в этом филиале
-    const transactions = await prisma.transaction.findMany({
-      where: {
-        customerId: user.id,
-        branchId: branch.id,
-      },
-    });
+    // Загружаем транзакции гостя в этом филиале и по всей сети
+    const [branchTxs, allGuestTxs] = await Promise.all([
+      prisma.transaction.findMany({
+        where: {
+          customerId: user.id,
+          branchId: branch.id,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      prisma.transaction.findMany({
+        where: {
+          customerId: user.id,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+    ]);
 
     const stats = calculateCustomerStamps(
-      transactions,
+      branchTxs,
       branch.network.targetStamps
     );
     currentStamps = stats.currentStamps;
     rewardsAvailable = stats.rewardsAvailable;
+    guestAnalytics = analyzeGuest(
+      user.id,
+      allGuestTxs,
+      branch.network.targetStamps
+    );
   }
 
   return (
@@ -121,6 +137,7 @@ export default async function GuestCardPage({ params }: CardPageProps) {
             rewardsAvailable,
             qrToken,
           }}
+          initialAnalytics={guestAnalytics}
         />
       </main>
 

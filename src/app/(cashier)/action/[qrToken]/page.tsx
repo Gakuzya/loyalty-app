@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import { calculateCustomerStamps, calculateTier } from '@/lib/loyalty';
+import { analyzeGuest } from '@/lib/analytics';
 import { CashierActionView } from '@/components/cashier/CashierActionView';
 
 interface ActionPageProps {
@@ -28,7 +29,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
   }
 
   // 2. Находим текущего сотрудника в базе и определяем его филиал
-  let baristaUser = await prisma.user.findUnique({
+  const baristaUser = await prisma.user.findUnique({
     where: { id: authUser.id },
     include: {
       branch: {
@@ -95,27 +96,34 @@ export default async function ActionPage({ params }: ActionPageProps) {
     });
   }
 
-  // 4. Загружаем транзакции клиента в данном филиале
-  const transactions = await prisma.transaction.findMany({
-    where: {
-      customerId: customer.id,
-      branchId: activeBranch.id,
-    },
-  });
+  // 4. Загружаем транзакции клиента в данном филиале и по всей сети
+  const [branchTransactions, allGuestTransactions] = await Promise.all([
+    prisma.transaction.findMany({
+      where: {
+        customerId: customer.id,
+        branchId: activeBranch.id,
+      },
+      orderBy: { createdAt: 'asc' },
+    }),
+    prisma.transaction.findMany({
+      where: {
+        customerId: customer.id,
+      },
+      orderBy: { createdAt: 'asc' },
+    }),
+  ]);
 
   const stats = calculateCustomerStamps(
-    transactions,
+    branchTransactions,
     activeBranch.network.targetStamps
   );
 
-  // 5. Все транзакции гостя по всей сети для определения Tier
-  const allGuestEarnedTxs = await prisma.transaction.count({
-    where: {
-      customerId: customer.id,
-      type: 'EARN_STAMP',
-    },
-  });
-  const guestTier = calculateTier(allGuestEarnedTxs);
+  const guestAnalytics = analyzeGuest(
+    customer.id,
+    allGuestTransactions,
+    activeBranch.network.targetStamps
+  );
+  const guestTier = calculateTier(guestAnalytics.totalEarned);
 
   return (
     <div className="min-h-screen bg-[#0f0d0c] text-stone-100 flex flex-col justify-between p-4 sm:p-6 select-none">
@@ -139,7 +147,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
             name: customer.name || 'Любимый гость',
             email: customer.email,
             tier: guestTier,
-            totalStamps: allGuestEarnedTxs,
+            totalStamps: guestAnalytics.totalEarned,
           }}
           branch={{
             id: activeBranch.id,
@@ -151,6 +159,7 @@ export default async function ActionPage({ params }: ActionPageProps) {
             currentStamps: stats.currentStamps,
             rewardsAvailable: stats.rewardsAvailable,
           }}
+          initialAnalytics={guestAnalytics}
           baristaEmail={authUser.email}
         />
       </main>

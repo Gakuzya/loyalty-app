@@ -7,12 +7,13 @@ import {
   Gift,
   MapPin,
   Sparkles,
-  PartyPopper,
   X,
+  Crown,
 } from 'lucide-react';
 import { StampGrid } from './StampGrid';
 import { GuestQR } from './GuestQR';
 import { createClient } from '@/lib/supabase/client';
+import { type GuestAnalyticsProfile } from '@/lib/analytics';
 import confetti from 'canvas-confetti';
 
 interface GuestCardClientProps {
@@ -31,16 +32,21 @@ interface GuestCardClientProps {
     rewardsAvailable: number;
     qrToken: string;
   };
+  initialAnalytics?: GuestAnalyticsProfile;
 }
 
 export const GuestCardClient: React.FC<GuestCardClientProps> = ({
   shop,
   card: initialCard,
+  initialAnalytics,
 }) => {
   const [activeTab, setActiveTab] = useState<'card' | 'qr'>('card');
   const [currentStamps, setCurrentStamps] = useState(initialCard.currentStamps);
   const [rewardsAvailable, setRewardsAvailable] = useState(
     initialCard.rewardsAvailable
+  );
+  const [analytics, setAnalytics] = useState<GuestAnalyticsProfile | undefined>(
+    initialAnalytics
   );
   const [showCelebration, setShowCelebration] = useState(false);
 
@@ -62,6 +68,10 @@ export const GuestCardClient: React.FC<GuestCardClientProps> = ({
       .on('broadcast', { event: 'stamp-update' }, ({ payload }) => {
         if (!payload || payload.customerId !== customerId) return;
 
+        if (payload.analytics) {
+          setAnalytics(payload.analytics);
+        }
+
         if (payload.branchId === shop.id) {
           setCurrentStamps(payload.currentStamps);
           setRewardsAvailable(payload.rewardsAvailable);
@@ -73,7 +83,7 @@ export const GuestCardClient: React.FC<GuestCardClientProps> = ({
                 spread: 70,
                 origin: { y: 0.5 },
               });
-            } catch (e) {
+            } catch {
               // ignore
             }
             setShowCelebration(true);
@@ -97,14 +107,18 @@ export const GuestCardClient: React.FC<GuestCardClientProps> = ({
         const res = await fetch(`/api/guest/status?userId=${customerId}`);
         if (!res.ok) return;
         const data = await res.json();
+        if (data.analytics) {
+          setAnalytics(data.analytics);
+        }
         const thisBranch = data.branches?.find(
-          (b: any) => b.branchId === shop.id
+          (b: { branchId: string; currentStamps: number; rewardsAvailable: number }) =>
+            b.branchId === shop.id
         );
         if (thisBranch) {
           setCurrentStamps(thisBranch.currentStamps);
           setRewardsAvailable(thisBranch.rewardsAvailable);
         }
-      } catch (e) {
+      } catch {
         // silent
       }
     };
@@ -223,6 +237,42 @@ export const GuestCardClient: React.FC<GuestCardClientProps> = ({
         </div>
       </div>
 
+      {/* ПЕРСОНАЛЬНОЕ ПРЕДЛОЖЕНИЕ И ПРИВИЛЕГИЯ УРОВНЯ */}
+      {analytics && (
+        <div
+          className={`p-3.5 rounded-2xl border space-y-1.5 ${
+            analytics.personalOffer.stampsToAward > 1
+              ? 'bg-amber-500/15 border-amber-500/40'
+              : 'bg-stone-900/70 border-stone-800'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-amber-400">
+              <Sparkles className="w-3 h-3" />
+              <span>Персональное предложение</span>
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-amber-500 text-stone-950 text-[10px] font-black">
+              {analytics.personalOffer.badge}
+            </span>
+          </div>
+          <div className="text-xs font-bold text-white leading-snug">
+            {analytics.personalOffer.title}
+          </div>
+          <div className="text-[11px] text-stone-300">
+            {analytics.personalOffer.description}
+          </div>
+          <div className="pt-1 border-t border-white/10 flex items-center justify-between text-[10px] text-stone-400">
+            <span className="flex items-center gap-1">
+              <Crown className="w-3 h-3 text-amber-400" />
+              <span>{analytics.tierPrivilege.tierLabel}</span>
+            </span>
+            <span className="text-amber-300 font-semibold">
+              {analytics.personalOffer.expiresLabel}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Прогресс-бар заполнения */}
       <div className="px-4 py-3 rounded-2xl bg-stone-900/50 border border-stone-800/60 shadow-inner">
         <div className="flex justify-between items-center text-xs mb-1.5 font-medium">
@@ -255,7 +305,7 @@ export const GuestCardClient: React.FC<GuestCardClientProps> = ({
             </div>
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-amber-500">
-                Ваша награда за 6 штампов
+                Ваша награда за {targetStamps} штампов
               </div>
               <div className="text-xs font-medium text-stone-200 mt-0.5">
                 {shop.rewardTitle}

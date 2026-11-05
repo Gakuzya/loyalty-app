@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import prisma from '@/lib/prisma';
 import { calculateCustomerStamps, calculateTier } from '@/lib/loyalty';
+import { analyzeGuest } from '@/lib/analytics';
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -9,7 +10,6 @@ export async function GET(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Можно передать userId в query параметрах для быстрой проверки
   const searchParams = request.nextUrl.searchParams;
   const queryUserId = searchParams.get('userId');
   const targetUserId = user?.id || queryUserId;
@@ -40,7 +40,14 @@ export async function GET(request: NextRequest) {
       }),
     ]);
 
-    const totalStamps = transactions.filter((t) => t.type === 'EARN_STAMP').length;
+    const targetStamps =
+      transactions[0]?.branch?.network?.targetStamps || 6;
+    const analytics = analyzeGuest(
+      targetUserId,
+      transactions,
+      targetStamps
+    );
+    const totalStamps = analytics.totalEarned;
     const currentTier = calculateTier(totalStamps);
 
     // Группируем по филиалам
@@ -95,6 +102,7 @@ export async function GET(request: NextRequest) {
         tier: currentTier,
         totalStamps,
       },
+      analytics,
       branches,
       history,
     });

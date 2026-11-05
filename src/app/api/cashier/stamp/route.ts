@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import prisma from '@/lib/prisma';
 import { calculateCustomerStamps, calculateTier } from '@/lib/loyalty';
+import { analyzeGuest } from '@/lib/analytics';
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -35,29 +36,55 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Branch not found' }, { status: 404 });
     }
 
-    // 2. Создаем транзакцию
     const txType = action === 'REDEEM_REWARD' ? 'REDEEM_REWARD' : 'EARN_STAMP';
 
-    const newTx = await prisma.transaction.create({
-      data: {
-        type: txType,
-        customerId,
-        baristaId: authUser.id,
-        branchId,
-      },
-      include: {
-        barista: {
-          select: { name: true },
-        },
-      },
+    // 2. Перед созданием транзакции оцениваем RFM-сегмент, привилегию уровня и персональный оффер гостя
+    const existingCustomerTxs = await prisma.transaction.findMany({
+      where: { customerId },
+      orderBy: { createdAt: 'asc' },
     });
 
-    // 3. Пересчитываем статистику для филиала
+    const preAwardAnalytics = analyzeGuest(
+      customerId,
+      existingCustomerTxs,
+      branch.network.targetStamps
+    );
+
+    const stampsToAward =
+      txType === 'EARN_STAMP' ? preAwardAnalytics.personalOffer.stampsToAward : 1;
+    const appliedOfferTitle =
+      txType === 'EARN_STAMP' && stampsToAward > 1
+        ? preAwardAnalytics.personalOffer.title
+        : null;
+
+    // 3. Создаем транзакцию (или 2 транзакции при срабатывании штампа x2 по привилегии уровня / офферу)
+    let baristaName = 'Бариста';
+    for (let i = 0; i < stampsToAward; i++) {
+      const created = await prisma.transaction.create({
+        data: {
+          type: txType,
+          customerId,
+          baristaId: authUser.id,
+          branchId,
+        },
+        include: {
+          barista: {
+            select: { name: true },
+          },
+        },
+      });
+      if (created.barista?.name) {
+        baristaName = created.barista.name;
+      }
+    }
+
+    // 4. Пересчитываем статистику для филиала
     const branchTxs = await prisma.transaction.findMany({
       where: {
         customerId,
         branchId,
       },
+      orderBy: { createdAt: 'asc' },
     });
 
     const stats = calculateCustomerStamps(
@@ -65,13 +92,15 @@ export async function POST(request: NextRequest) {
       branch.network.targetStamps
     );
 
-    // 4. Пересчитываем общий тир гостя
-    const allEarnedTxsCount = await prisma.transaction.count({
-      where: {
-        customerId,
-        type: 'EARN_STAMP',
-      },
+    // 5. Пересчитываем общий тир и обновленную аналитику гостя после визита
+    const updatedAllCustomerTxs = await prisma.transaction.findMany({
+      where: { customerId },
+      orderBy: { createdAt: 'asc' },
     });
+
+    const allEarnedTxsCount = updatedAllCustomerTxs.filter(
+      (t) => t.type === 'EARN_STAMP'
+    ).length;
 
     const newTier = calculateTier(allEarnedTxsCount);
     await prisma.user.update({
@@ -79,7 +108,13 @@ export async function POST(request: NextRequest) {
       data: { tier: newTier },
     });
 
-    // 5. Отправляем Realtime Broadcast в Supabase, чтобы экран гостя мгновенно обновился
+    const updatedAnalytics = analyzeGuest(
+      customerId,
+      updatedAllCustomerTxs,
+      branch.network.targetStamps
+    );
+
+    // 6. Отправляем Realtime Broadcast в Supabase, чтобы экран гостя мгновенно обновился
     try {
       const adminSupabase = createAdminClient();
       await adminSupabase.channel('loyalty-live-events').send({
@@ -89,14 +124,17 @@ export async function POST(request: NextRequest) {
           customerId,
           branchId,
           branchName: branch.name,
-          baristaName: newTx.barista?.name || 'Бариста',
+          baristaName,
           action: txType,
+          stampsAwarded: stampsToAward,
+          appliedOfferTitle,
           currentStamps: stats.currentStamps,
           targetStamps: branch.network.targetStamps,
           rewardsAvailable: stats.rewardsAvailable,
           rewardTitle: branch.network.rewardTitle,
           totalStamps: allEarnedTxsCount,
           tier: newTier,
+          analytics: updatedAnalytics,
           timestamp: new Date().toISOString(),
         },
       });
@@ -106,14 +144,19 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      stampsAwarded: stampsToAward,
+      appliedOfferTitle,
       currentStamps: stats.currentStamps,
       targetStamps: branch.network.targetStamps,
       rewardsAvailable: stats.rewardsAvailable,
       rewardTitle: branch.network.rewardTitle,
       totalStamps: allEarnedTxsCount,
       tier: newTier,
+      analytics: updatedAnalytics,
       isRewardReady: stats.rewardsAvailable > 0,
-      justEarnedReward: txType === 'EARN_STAMP' && stats.currentStamps === 0 && stats.rewardsAvailable > 0,
+      justEarnedReward:
+        txType === 'EARN_STAMP' &&
+        stats.rewardsAvailable > preAwardAnalytics.rewardsAvailable,
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);

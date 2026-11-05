@@ -18,10 +18,12 @@ import {
   PartyPopper,
   X,
   Radio,
+  Activity,
 } from 'lucide-react';
 import Link from 'next/link';
 import { logout } from '@/app/login/actions';
 import { TIER_CONFIG } from '@/lib/loyalty';
+import { type GuestAnalyticsProfile } from '@/lib/analytics';
 import { createClient } from '@/lib/supabase/client';
 import confetti from 'canvas-confetti';
 
@@ -56,16 +58,21 @@ interface GuestPortalViewProps {
   };
   branches: BranchLoyaltyItem[];
   initialHistory?: ActivityHistoryItem[];
+  initialAnalytics?: GuestAnalyticsProfile;
 }
 
 export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
   user: initialUser,
   branches: initialBranches,
   initialHistory = [],
+  initialAnalytics,
 }) => {
   const [user, setUser] = useState(initialUser);
   const [branches, setBranches] = useState<BranchLoyaltyItem[]>(initialBranches);
   const [history, setHistory] = useState<ActivityHistoryItem[]>(initialHistory);
+  const [analytics, setAnalytics] = useState<GuestAnalyticsProfile | undefined>(
+    initialAnalytics
+  );
   const [copied, setCopied] = useState(false);
   const [liveToast, setLiveToast] = useState<string | null>(null);
   const [celebrationReward, setCelebrationReward] = useState<{
@@ -96,7 +103,6 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
       .on('broadcast', { event: 'stamp-update' }, ({ payload }) => {
         if (!payload || payload.customerId !== user.id) return;
 
-        // Звуковая и тактильная отдача
         if (typeof navigator !== 'undefined' && navigator.vibrate) {
           navigator.vibrate([100, 50, 100]);
         }
@@ -116,13 +122,16 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
           })
         );
 
-        // Обновляем данные пользователя
+        // Обновляем данные пользователя и аналитику
         if (payload.totalStamps !== undefined) {
           setUser((prev) => ({
             ...prev,
             totalStamps: payload.totalStamps,
             tier: payload.tier || prev.tier,
           }));
+        }
+        if (payload.analytics) {
+          setAnalytics(payload.analytics);
         }
 
         // Добавляем в историю активности
@@ -137,7 +146,8 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
           ...prev.slice(0, 7),
         ]);
 
-        // Если это закрытие 6-й чашки — взрываем конфетти и открываем праздник
+        const awardedCount = payload.stampsAwarded || 1;
+
         if (payload.action === 'EARN_STAMP' && payload.rewardsAvailable > 0) {
           try {
             confetti({
@@ -145,7 +155,7 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
               spread: 80,
               origin: { y: 0.5 },
             });
-          } catch (e) {
+          } catch {
             // ignore
           }
 
@@ -154,10 +164,16 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
             rewardTitle: payload.rewardTitle || 'Бесплатный напиток',
           });
 
-          setLiveToast(`🎉 ВАШ 6-Й НАПИТОК — БЕСПЛАТНЫЙ!`);
+          setLiveToast(
+            awardedCount > 1
+              ? `🎉 +${awardedCount} ШТАМПА ПО АКЦИИ! ВАШ 6-Й НАПИТОК — БЕСПЛАТНЫЙ!`
+              : `🎉 ВАШ 6-Й НАПИТОК — БЕСПЛАТНЫЙ!`
+          );
         } else if (payload.action === 'EARN_STAMP') {
           setLiveToast(
-            `+1 Штамп начислен в «${payload.branchName || 'кофейне'}»!`
+            awardedCount > 1
+              ? `⚡ Начислено +${awardedCount} штампа (акция x2) в «${payload.branchName || 'кофейне'}»!`
+              : `+1 Штамп начислен в «${payload.branchName || 'кофейне'}»!`
           );
         } else if (payload.action === 'REDEEM_REWARD') {
           setLiveToast(`☕ Бесплатный напиток успешно выдан! Приятного кофе!`);
@@ -172,7 +188,7 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
     };
   }, [user.id, supabase]);
 
-  // 2. БЫСТРЫЙ ФОНОВЫЙ POLLING (каждые 3 сек), чтобы гарантировать 100% синхронизацию без ручного F5
+  // 2. БЫСТРЫЙ ФОНОВЫЙ POLLING (каждые 3 сек)
   useEffect(() => {
     const pollStatus = async () => {
       if (document.hidden) return;
@@ -190,10 +206,13 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
             tier: data.user.tier,
           }));
         }
+        if (data.analytics) {
+          setAnalytics(data.analytics);
+        }
         if (data.history) {
           setHistory(data.history);
         }
-      } catch (e) {
+      } catch {
         // silent
       }
     };
@@ -267,7 +286,7 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
         </div>
       )}
 
-      {/* ОГРОМНЫЙ ГЛАВНЫЙ БАННЕР БЕСПЛАТНОГО НАПИТКА (ЕСЛИ ДОСТУПЕН НА БАЛАНСЕ) */}
+      {/* ОГРОМНЫЙ ГЛАВНЫЙ БАННЕР БЕСПЛАТНОГО НАПИТКА */}
       {readyRewardBranch && (
         <div className="p-5 rounded-3xl bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 text-stone-950 shadow-2xl shadow-emerald-500/30 border-2 border-emerald-300 relative overflow-hidden">
           <div className="flex items-start gap-3.5">
@@ -323,7 +342,55 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
         </form>
       </div>
 
-      {/* КАРТОЧКА СТАТУСА ЛОЯЛЬНОСТИ (TIER GAMIFICATION) */}
+      {/* КАРТОЧКА ПЕРСОНАЛЬНОГО ПРЕДЛОЖЕНИЯ (RFM & CHURN PERSONAL OFFER) */}
+      {analytics && (
+        <div
+          className={`p-4 rounded-3xl border shadow-xl space-y-2.5 ${
+            analytics.personalOffer.stampsToAward > 1
+              ? 'bg-gradient-to-br from-amber-500/20 via-amber-500/10 to-stone-900 border-amber-500/40'
+              : 'bg-stone-900/90 border-stone-800'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-amber-400">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Персональное предложение</span>
+            </span>
+            <span
+              className={`px-2.5 py-0.5 rounded-full text-[10px] font-black ${
+                analytics.personalOffer.stampsToAward > 1
+                  ? 'bg-amber-500 text-stone-950 shadow-sm shadow-amber-500/30'
+                  : 'bg-stone-800 text-amber-400 border border-stone-700'
+              }`}
+            >
+              {analytics.personalOffer.badge}
+            </span>
+          </div>
+
+          <h3 className="text-sm font-extrabold text-white leading-snug">
+            {analytics.personalOffer.title}
+          </h3>
+          <p className="text-xs text-stone-300 leading-relaxed">
+            {analytics.personalOffer.description}
+          </p>
+
+          <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[11px] text-stone-400">
+            <span className="flex items-center gap-1">
+              <Activity className="w-3.5 h-3.5 text-amber-400" />
+              <span>
+                Статус: <strong className="text-stone-200">{analytics.segmentMeta.shortLabel}</strong>
+                {analytics.avgIntervalDays !== null &&
+                  ` • ритм ~${analytics.avgIntervalDays} дн.`}
+              </span>
+            </span>
+            <span className="text-amber-300 font-semibold">
+              {analytics.personalOffer.expiresLabel}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* КАРТОЧКА СТАТУСА ЛОЯЛЬНОСТИ И ДЕЙСТВУЮЩИХ ПРИВИЛЕГИЙ УРОВНЯ (TIER GAMIFICATION) */}
       <div
         className={`p-5 rounded-3xl bg-gradient-to-br ${tierInfo.color} border border-white/20 shadow-2xl relative overflow-hidden text-stone-950`}
       >
@@ -340,7 +407,7 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
 
           <div className="text-right">
             <span className="text-[10px] text-white/80 uppercase font-semibold block">
-              Всего визитов
+              Всего штампов
             </span>
             <span className="text-2xl font-black text-white drop-shadow-sm">
               {user.totalStamps} ☕
@@ -348,10 +415,25 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
           </div>
         </div>
 
-        {/* Привилегия статуса */}
-        <div className="mt-3 p-3 rounded-2xl bg-black/20 backdrop-blur-md text-white text-xs font-medium flex items-center gap-2">
-          <Zap className="w-4 h-4 text-amber-300 shrink-0" />
-          <span>{tierInfo.perk}</span>
+        {/* Реально работающая привилегия статуса */}
+        <div className="mt-3 p-3 rounded-2xl bg-black/25 backdrop-blur-md text-white text-xs font-medium space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 font-bold">
+              <Zap className="w-4 h-4 text-amber-300 shrink-0" />
+              <span>Привилегия вашего уровня:</span>
+            </div>
+            {analytics?.tierPrivilege.isTierBonusActiveNow && (
+              <span className="px-2 py-0.5 rounded-full bg-amber-400 text-stone-950 text-[10px] font-black">
+                АКТИВНО X2
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-white/95">{tierInfo.perk}</p>
+          {analytics && (
+            <p className="text-[11px] text-amber-200 font-semibold pt-0.5">
+              → {analytics.tierPrivilege.nextBonusHint}
+            </p>
+          )}
         </div>
 
         {/* Прогресс до следующего уровня */}
@@ -377,7 +459,9 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
 
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-semibold mb-4">
           <Sparkles className="w-3.5 h-3.5" />
-          Персональный QR-код для кассы
+          {analytics && analytics.personalOffer.stampsToAward > 1
+            ? `QR-код активирует +${analytics.personalOffer.stampsToAward} штампа на кассе`
+            : 'Персональный QR-код для кассы'}
         </div>
 
         {/* QR код */}
@@ -391,7 +475,7 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
         </div>
 
         <p className="text-xs text-stone-200 font-medium max-w-xs">
-          Покажите бариста на кассе — штамп или подарок зачислятся моментально в реальном времени!
+          Покажите бариста на кассе — штамп, привилегия уровня или подарок зачислятся моментально в реальном времени!
         </p>
 
         {/* Копирование ID */}
@@ -464,7 +548,7 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
                     )}
                   </div>
 
-                  {/* ЧЕТКАЯ ШКАЛА ШТАМПОВ С ЯСНОЙ ИНДИКАЦИЕЙ 6-ГО ПОДАРКА */}
+                  {/* ЧЕТКАЯ ШКАЛА ШТАМПОВ */}
                   <div className="grid grid-cols-6 gap-1.5 pt-1">
                     {Array.from({ length: b.targetStamps }, (_, i) => {
                       const isEarned = i < b.currentStamps;
@@ -526,7 +610,7 @@ export const GuestPortalView: React.FC<GuestPortalViewProps> = ({
         )}
       </div>
 
-      {/* ИСТОРИЯ ВИЗИТОВ И НАЧИСЛЕНИЙ (ПОНЯТНО, ЧТО И КОГДА ПОЛУЧЕНО) */}
+      {/* ИСТОРИЯ ВИЗИТОВ И НАЧИСЛЕНИЙ */}
       <div className="space-y-3 pt-2">
         <h2 className="text-xs font-bold uppercase tracking-wider text-stone-400 flex items-center gap-1.5 px-1">
           <Clock className="w-4 h-4 text-amber-500" />
